@@ -1,0 +1,34 @@
+# Operations Guide
+
+## Prepare storage
+
+Use a dedicated external APFS volume. Do not use a Time Machine destination. Keep the isolated Photos library, the migration database, reports, and temporary extraction directory on this volume. The tool requires enough free space for the uncompressed Takeout media plus 20 percent headroom.
+
+`prepare-volume` is optional and destructive. It only accepts an external whole-disk identifier and requires an exact confirmation. Verify the disk in Disk Utility before running it.
+
+## Create the isolated library
+
+1. Quit Photos.
+2. Hold Option while opening Photos.
+3. Select **Create New**.
+4. Save the library as `GoogleTakeoutMigration.photoslibrary` in the selected external volume.
+5. Do not select **Use as System Photo Library**.
+6. Do not enable iCloud Photos in this library.
+
+The guided migration waits for this library before it starts importing.
+
+## Permissions
+
+The first Photos import triggers a macOS Automation permission request for the terminal application. Approve it only after verifying the isolated library is open. If macOS blocks protected-library inspection, grant Full Disk Access to the terminal application in Privacy & Security and rerun `doctor`.
+
+## Recovery
+
+Run `status` to inspect imported, failed, skipped, and unknown items. Failed items remain in SQLite with their error. Unknown items are intentionally not re-imported automatically because Photos may have accepted them before a process interruption.
+
+Run `report` to write a Markdown result summary under `.gfotos-migrator/reports` on the external volume.
+
+## Handoff
+
+Run `handoff-check` before touching the main library. It blocks when the volume containing the main library lacks enough currently free storage for the isolated library size. iCloud optimization is not treated as available immediate capacity.
+
+Open the main library manually, choose **File > Import**, select the isolated Photos library, review the presented items, and choose **Import All New Items** only after verification. Do not delete the isolated library until the main library and iCloud have been checked.

@@ -1,0 +1,40 @@
+{
+  "name": "gfotos-migrator",
+  "version": "0.1.0",
+  "description": "A safe local Google Takeout to isolated Photos library migrator for macOS.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "gfotos-migrator": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.tsx",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "pack:local": "npm run build && npm pack --cache .npm-cache"
+  },
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "ink": "^6.4.0",
+    "react": "^19.1.0",
+    "yauzl": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/yauzl": "^2.10.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  },
+  "packageManager": "pnpm@11.19.0"
+}
