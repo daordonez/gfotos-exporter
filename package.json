@@ -1,9 +1,17 @@
 {
   "name": "gfotos-migrator",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "A safe local Google Takeout to isolated Photos library migrator for macOS.",
   "type": "module",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daordonez/gfotos-exporter.git"
+  },
+  "homepage": "https://github.com/daordonez/gfotos-exporter#readme",
+  "bugs": {
+    "url": "https://github.com/daordonez/gfotos-exporter/issues"
+  },
   "bin": {
     "gfotos-migrator": "dist/cli.js"
   },

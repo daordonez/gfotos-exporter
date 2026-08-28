@@ -12,7 +12,7 @@
     "declaration": true,
     "sourceMap": true,
     "jsx": "react-jsx",
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["dist", "node_modules"]
