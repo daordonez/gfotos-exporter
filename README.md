@@ -19,7 +19,34 @@
 - An external APFS volume. USB flash drives are allowed with a warning, but an external SSD is strongly recommended.
 - Terminal access to Photos automation when macOS asks for permission. Full Disk Access may be required to inspect a protected Photos library.
 
-## Install from a local package
+## Install version 0.0.0 from GitHub Releases
+
+Version `0.0.0` is the first manually published preview release. Its distributable
+package is attached to the GitHub Release, so the target Mac does not need a
+repository checkout or TypeScript build tools.
+
+Because this repository is private, configure a fine-grained GitHub token with
+**Contents: Read** permission on this repository before the first install:
+
+```sh
+export GITHUB_TOKEN="your-github-token"
+pnpm config set //github.com/:_authToken "$GITHUB_TOKEN"
+```
+
+Install the exact release directly from GitHub:
+
+```sh
+pnpm add --global https://github.com/daordonez/gfotos-exporter/releases/download/v0.0.0/gfotos-migrator-0.0.0.tgz
+gfotos-migrator --help
+```
+
+`pnpm` retrieves the package from the release asset URL shown above. To remove it:
+
+```sh
+pnpm remove --global gfotos-migrator
+```
+
+## Build a local package
 
 Build the distributable package on the development Mac:
 
@@ -31,14 +58,14 @@ pnpm pack:local
 Install the generated package on the target Mac:
 
 ```sh
-npm install --global ./gfotos-migrator-0.1.0.tgz
+pnpm add --global ./gfotos-migrator-0.0.0.tgz
 gfotos-migrator --help
 ```
 
 Uninstall it with:
 
 ```sh
-npm uninstall --global gfotos-migrator
+pnpm remove --global gfotos-migrator
 ```
 
 ## Guided migration
