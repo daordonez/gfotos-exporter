@@ -101,6 +101,6 @@ test('exports version from package.json', async () => {
   const require = createRequire(import.meta.url);
   const packageInfo = require('../package.json');
   assert.equal(VERSION, packageInfo.version);
-  assert.match(VERSION, /^\d+\.\d+\.\d+/);
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
 });
 
