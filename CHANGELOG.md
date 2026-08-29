@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.1.0...gfotos-migrator-v1.2.0) (2026-08-29)
+
+
+### Features
+
+* Auto-discover and select external storage after inventory ([51c7bda](https://github.com/daordonez/gfotos-exporter/commit/51c7bda26f23e58e80f1602ce29489a65e52d311))
+
+
+### Bug Fixes
+
+* Use cached volume state when navigating back from disk selection ([6a7a8d1](https://github.com/daordonez/gfotos-exporter/commit/6a7a8d1763c516aa4f6395c65e27a8e3a519247f))
+
 ## [1.1.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.0.0...gfotos-migrator-v1.1.0) (2026-08-29)
 
 
