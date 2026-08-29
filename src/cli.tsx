@@ -8,8 +8,7 @@ import {isPhotosRunning, openPhotosLibrary} from './photos.js';
 import {inventoryTakeout} from './takeout.js';
 import {eraseExternalDisk, inspectVolume, validateExternalApfs} from './volume.js';
 import {runTui} from './tui.js';
-
-const VERSION = '0.1.0';
+import {VERSION} from './version.js';
 
 function option(argumentsList: string[], name: string): string | undefined {
   const index = argumentsList.indexOf(name);

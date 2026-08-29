@@ -9,6 +9,7 @@ import {MigrationDatabase} from '../dist/database.js';
 import {requiredBytes} from '../dist/migration.js';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout} from '../dist/takeout.js';
+import {findAvailableUpdate} from '../dist/updates.js';
 import {volumeMountPath} from '../dist/volume.js';
 
 const execute = promisify(execFile);
@@ -57,4 +58,24 @@ test('inventories photos and videos from a Takeout ZIP', async () => {
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
+});
+
+test('selects the newest stable release with its matching package', () => {
+  const update = findAvailableUpdate([
+    {tag_name: 'v0.1.1', draft: false, prerelease: false, assets: [{id: 11, name: 'gfotos-migrator-0.1.1.tgz'}]},
+    {tag_name: 'v0.2.0-beta.1', draft: false, prerelease: true, assets: [{id: 12, name: 'gfotos-migrator-0.2.0-beta.1.tgz'}]},
+    {tag_name: 'v0.2.0', draft: false, prerelease: false, assets: [{id: 13, name: 'gfotos-migrator-0.2.0.tgz'}]},
+    {tag_name: 'v0.3.0', draft: false, prerelease: false, assets: []}
+  ], '0.1.0');
+  assert.deepEqual(update, {version: '0.2.0', assetId: 13, packageName: 'gfotos-migrator-0.2.0.tgz'});
+});
+
+test('does not suggest draft, prerelease, malformed, or older releases', () => {
+  const update = findAvailableUpdate([
+    {tag_name: 'v0.2.0', draft: true, prerelease: false, assets: [{id: 1, name: 'gfotos-migrator-0.2.0.tgz'}]},
+    {tag_name: 'v0.1.1-rc.1', draft: false, prerelease: true, assets: [{id: 2, name: 'gfotos-migrator-0.1.1-rc.1.tgz'}]},
+    {tag_name: 'latest', draft: false, prerelease: false, assets: [{id: 3, name: 'gfotos-migrator-latest.tgz'}]},
+    {tag_name: 'v0.1.0', draft: false, prerelease: false, assets: [{id: 4, name: 'gfotos-migrator-0.1.0.tgz'}]}
+  ], '0.1.0');
+  assert.equal(update, undefined);
 });

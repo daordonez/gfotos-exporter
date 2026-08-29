@@ -41,6 +41,8 @@ Inicia el flujo guiado:
 gfotos-migrator guided-migration
 ```
 
+When guided migration starts, the tool checks published GitHub Releases and offers to install a newer stable version. Rejecting the prompt continues migration without changes. For private releases, export the installation token only for that execution (`GITHUB_TOKEN` or `GH_TOKEN`) or sign in with GitHub CLI first (`gh auth login`). The token is never stored or displayed.
+
 La fototeca de destino es `GoogleTakeoutMigration.photoslibrary`. Debe permanecer fuera de iCloud Photos y no puede ser la Fototeca del Sistema. Los ZIP de Takeout se tratan como entrada de solo lectura.
 
 Para borrar y preparar un disco externo, usa `prepare-volume` únicamente después de verificar el identificador con Utilidad de Discos o `diskutil list`: esta operación elimina todo el contenido del disco seleccionado.

@@ -21,6 +21,12 @@ The guided migration waits for this library before it starts importing.
 
 Guided migration checks ExifTool and offers to install it through Homebrew when it is missing. The first Photos import triggers a macOS Automation permission request for the terminal application. Approve it only after verifying the isolated library is open. If macOS blocks protected-library inspection, grant Full Disk Access to the terminal application in Privacy & Security and rerun `doctor`.
 
+## Updates
+
+Each guided migration launch checks GitHub Releases for a newer stable package before showing the main menu. The check has a short timeout and failures do not block migration. When an update is available, the operator can accept it to download the exact matching release package and install it with `npm` globally, then restart the command. Rejecting the prompt makes no change.
+
+For a private repository, provide a fine-grained token with `Contents: Read` through `GITHUB_TOKEN` or `GH_TOKEN` for that terminal session, or authenticate GitHub CLI with `gh auth login`. The tool does not persist or print the token.
+
 ## Recovery
 
 Run `status` to inspect imported, failed, skipped, and unknown items. Failed items remain in SQLite with their error. Unknown items are intentionally not re-imported automatically because Photos may have accepted them before a process interruption.
