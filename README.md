@@ -4,7 +4,7 @@ Herramienta local para macOS que importa archivos ZIP de Google Photos Takeout a
 
 ## Instalación
 
-El instalador prepara automáticamente Node.js, npm y ExifTool, descarga la release privada `0.0.0` y deja `gfotos-migrator` disponible para el usuario actual.
+El instalador prepara automáticamente Node.js, npm y ExifTool, muestra las tres releases publicadas más recientes y deja `gfotos-migrator` disponible para el usuario actual. La opción predeterminada al pulsar Intro es siempre la release más reciente.
 
 1. Crea un [personal access token fine-grained según la documentación oficial de GitHub](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token).
 2. Configúralo con el mínimo privilegio:
