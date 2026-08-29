@@ -90,7 +90,7 @@ test('importing database module does not emit the node:sqlite experimental warni
   const root = path.resolve(fileURLToPath(import.meta.url), '../../');
   const databasePath = path.join(root, 'dist', 'database.js');
   const {stderr} = await new Promise((resolve, reject) => {
-    execFile(process.execPath, ['--input-type=module', '--eval', `import(${JSON.stringify(databasePath)})`], {encoding: 'utf8'}, (err, stdout, stderr) => {
+    execFile(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(databasePath)})`], {encoding: 'utf8'}, (err, stdout, stderr) => {
       if (err) reject(err); else resolve({stdout, stderr});
     });
   });
