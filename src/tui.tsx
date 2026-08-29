@@ -7,7 +7,7 @@ import {exifToolAvailable, installExifTool} from './media.js';
 import {importCandidates, initializePaths, requiredBytes, type ImportProgress} from './migration.js';
 import {openPhotosLibrary} from './photos.js';
 import {inventoryTakeout} from './takeout.js';
-import {eraseExternalDisk, listEligibleExternalVolumes, listExternalWholeDisks, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
+import {eraseExternalDisk, externalWholeDiskForVolume, listExternalWholeDisks, listSelectableExternalVolumes, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
 import type {MediaCandidate, TakeoutInventory} from './domain.js';
 
 type Screen = 'menu' | 'source' | 'storage' | 'select-volume' | 'select-disk' | 'volume-name' | 'erase-confirmation' | 'formatting' | 'dependency' | 'installing-dependency' | 'library' | 'confirm' | 'running' | 'complete' | 'no-external-volume';
@@ -26,7 +26,7 @@ function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>('menu');
   const [sourcePath, setSourcePath] = useState('');
   const [volumePath, setVolumePath] = useState('');
-  const [volumeName, setVolumeName] = useState('GoogleMigration');
+  const [volumeName, setVolumeName] = useState('GPhotos_Export');
   const [selectedDisk, setSelectedDisk] = useState<ExternalDisk>();
   const [externalDisks, setExternalDisks] = useState<ExternalDisk[]>([]);
   const [externalVolumes, setExternalVolumes] = useState<ExternalVolume[]>([]);
@@ -58,9 +58,16 @@ function App(): React.JSX.Element {
     try {
       if (!inventory) return;
       setError(undefined);
-      await validateExternalApfs(volume.mountPoint, requiredBytes(inventory));
-      setVolumePath(volume.mountPoint);
-      await continueAfterStorage();
+      if (volume.filesystem === 'apfs' && volume.availableBytes >= requiredBytes(inventory)) {
+        await validateExternalApfs(volume.mountPoint, requiredBytes(inventory));
+        setVolumePath(volume.mountPoint);
+        await continueAfterStorage();
+        return;
+      }
+      const disk = await externalWholeDiskForVolume(volume.mountPoint);
+      if (disk.capacityBytes < requiredBytes(inventory)) throw new Error(`The selected disk capacity is below the required migration space of ${formatBytes(requiredBytes(inventory))}.`);
+      setSelectedDisk(disk);
+      setScreen('volume-name');
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
 
@@ -68,7 +75,7 @@ function App(): React.JSX.Element {
     try {
       if (!inventory) return;
       setError(undefined);
-      const volumes = await listEligibleExternalVolumes(requiredBytes(inventory));
+      const volumes = await listSelectableExternalVolumes();
       setExternalVolumes(volumes);
       setScreen(volumes.length > 0 ? 'select-volume' : 'no-external-volume');
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
@@ -151,10 +158,10 @@ function App(): React.JSX.Element {
     {screen === 'storage' && inventory && <>
       <Text>{`${inventory.images} photos, ${inventory.videos} videos, ${inventory.archives} ZIP archives.`}</Text>
       <Text>{`Required external free space: ${formatBytes(requiredBytes(inventory))}.`}</Text>
-      <Text bold>Migration storage must be an external APFS volume.</Text>
+      <Text bold>Migration storage must be an external APFS volume. Other external formats can be converted after explicit confirmation.</Text>
       <Select options={[
         {label: 'Prepare an external disk now (erases that disk)', value: 'prepare'},
-        {label: 'Use an existing external APFS volume', value: 'existing'},
+        {label: 'Select an external volume', value: 'existing'},
         {label: 'Cancel migration', value: 'cancel'}
       ]} onChange={value => {
         if (value === 'prepare') void loadExternalDisks();
@@ -163,14 +170,14 @@ function App(): React.JSX.Element {
       }}/>
     </>}
     {screen === 'select-volume' && <>
-      <Text bold>Select the external APFS volume for the isolated migration library.</Text>
-      <Text dimColor>System volumes, Time Machine destinations, non-APFS volumes, and volumes without enough free space are excluded.</Text>
-      <Select visibleOptionCount={8} options={externalVolumes.map(volume => ({label: `${volume.name} — ${formatBytes(volume.availableBytes)} free of ${formatBytes(volume.capacityBytes)}`, value: volume.mountPoint}))} onChange={mountPoint => {
+      <Text bold>Select the external volume for the isolated migration library.</Text>
+      <Text dimColor>System volumes, Time Machine destinations, and read-only volumes are excluded. Non-APFS volumes will be erased and converted to APFS after confirmation.</Text>
+      <Select visibleOptionCount={8} options={externalVolumes.map(volume => ({label: `${volume.name} — ${volume.filesystem || 'unknown'} — ${formatBytes(volume.availableBytes)} free of ${formatBytes(volume.capacityBytes)}`, value: volume.mountPoint}))} onChange={mountPoint => {
         const volume = externalVolumes.find(candidate => candidate.mountPoint === mountPoint);
         if (volume) void selectVolume(volume);
       }}/>
     </>}
-    {screen === 'no-external-volume' && <StatusMessage variant="warning">No eligible external storage was found. Connect an external APFS volume with enough free space and restart guided migration.</StatusMessage>}
+    {screen === 'no-external-volume' && <StatusMessage variant="warning">No selectable external storage was found. Connect an external volume and restart guided migration.</StatusMessage>}
     {screen === 'select-disk' && <>
       <Text bold>Select the external physical disk to erase and format as APFS.</Text>
       <Text color="red">All data on the selected disk will be permanently erased.</Text>
@@ -185,11 +192,11 @@ function App(): React.JSX.Element {
         setScreen('volume-name');
       }}/> : <StatusMessage variant="warning">No eligible external physical disks were found. Connect one and restart guided migration.</StatusMessage>}
     </>}
-    {screen === 'volume-name' && <><Text>{`APFS volume name for ${selectedDisk?.deviceIdentifier ?? 'the selected disk'}:`}</Text><TextInput defaultValue={volumeName} onSubmit={value => {
+    {screen === 'volume-name' && <><Text>{`Descriptive APFS volume name for ${selectedDisk?.deviceIdentifier ?? 'the selected disk'}:`}</Text><Text dimColor>Example: GPhotos_Export. This name identifies the disk as Google Photos migration storage.</Text><TextInput defaultValue={volumeName} onSubmit={value => {
       try { volumeMountPath(value); setVolumeName(value.trim()); setScreen('erase-confirmation'); } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     }}/></>}
     {screen === 'erase-confirmation' && <>
-      <Text color="red" bold>{`Last warning: ${selectedDisk?.deviceIdentifier} (${selectedDisk?.name}) will be erased permanently.`}</Text>
+      <Text color="red" bold>{`Last warning: every partition on ${selectedDisk?.deviceIdentifier} (${selectedDisk?.name}) will be erased permanently.`}</Text>
       <Text>{`Type ${selectedDisk?.deviceIdentifier} exactly to create the APFS volume “${volumeName}”: `}</Text>
       <TextInput onSubmit={value => {
         if (value.trim() !== selectedDisk?.deviceIdentifier) { setError('The disk identifier did not match. No disk was changed.'); return; }

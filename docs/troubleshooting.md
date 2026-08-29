@@ -10,7 +10,7 @@ The migration requires external APFS storage. The selected path may be internal,
 
 ## No eligible external volume is listed
 
-Connect an external APFS volume with enough free capacity and restart guided migration. System volumes and configured Time Machine destinations are intentionally excluded. Use the separate disk-preparation option only when you have verified that erasing the selected external physical disk is safe.
+Connect a mounted external volume and restart guided migration. System volumes, configured Time Machine destinations, and read-only volumes are intentionally excluded. Non-APFS volumes can be selected, but converting one to APFS erases its entire external physical disk after exact identifier confirmation. Use the descriptive `GPhotos_Export` default name, or choose another clear migration-specific name, so the disk remains identifiable after formatting.
 
 ## Photos import is denied
 

@@ -41,9 +41,8 @@ function normalizedMountPoint(value: string): string {
   return path.resolve(value);
 }
 
-export function isEligibleExternalVolume(volume: VolumeInfo, timeMachineMountPoints: string[] = []): boolean {
+export function isSelectableExternalVolume(volume: VolumeInfo, timeMachineMountPoints: string[] = []): boolean {
   return volume.isExternal
-    && volume.filesystem === 'apfs'
     && !volume.isReadOnly
     && volume.mountPoint.startsWith('/Volumes/')
     && !timeMachineMountPoints.map(normalizedMountPoint).includes(normalizedMountPoint(volume.mountPoint));
@@ -58,7 +57,7 @@ async function listTimeMachineMountPoints(): Promise<string[]> {
   }
 }
 
-export async function listEligibleExternalVolumes(minimumBytes = 0): Promise<ExternalVolume[]> {
+export async function listSelectableExternalVolumes(): Promise<ExternalVolume[]> {
   const [entries, timeMachineMountPoints] = await Promise.all([
     readdir('/Volumes', {withFileTypes: true}),
     listTimeMachineMountPoints()
@@ -68,7 +67,7 @@ export async function listEligibleExternalVolumes(minimumBytes = 0): Promise<Ext
     .map(async entry => {
       const mountPoint = path.join('/Volumes', entry.name);
       const volume = await inspectVolume(mountPoint);
-      if (!isEligibleExternalVolume(volume, timeMachineMountPoints) || volume.availableBytes < minimumBytes) return undefined;
+      if (!isSelectableExternalVolume(volume, timeMachineMountPoints)) return undefined;
       return {...volume, name: entry.name};
     }));
   return results
@@ -76,6 +75,26 @@ export async function listEligibleExternalVolumes(minimumBytes = 0): Promise<Ext
     .map(result => result.value)
     .filter((volume): volume is ExternalVolume => volume !== undefined)
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function parentWholeDiskIdentifier(deviceIdentifier: string | undefined, parentWholeDisk: string | undefined): string {
+  const candidate = parentWholeDisk ?? deviceIdentifier?.match(/^(disk\d+)s\d+$/)?.[1];
+  if (!candidate || !/^disk\d+$/.test(candidate)) throw new Error('Unable to determine the external physical disk for the selected volume.');
+  return candidate;
+}
+
+export async function externalWholeDiskForVolume(target: string): Promise<ExternalDisk> {
+  const {stdout} = await run('/usr/sbin/diskutil', ['info', '-plist', target]);
+  const deviceIdentifier = parentWholeDiskIdentifier(xmlValue(stdout, 'DeviceIdentifier'), xmlValue(stdout, 'ParentWholeDisk'));
+  const {stdout: diskInfo} = await run('/usr/sbin/diskutil', ['info', '-plist', `/dev/${deviceIdentifier}`]);
+  if (xmlBoolean(diskInfo, 'Internal') !== false || xmlBoolean(diskInfo, 'WholeDisk') !== true) {
+    throw new Error('Only a whole external physical disk can be formatted.');
+  }
+  return {
+    deviceIdentifier,
+    name: xmlValue(diskInfo, 'MediaName') ?? xmlValue(diskInfo, 'IORegistryEntryName') ?? 'External disk',
+    capacityBytes: Number(xmlValue(diskInfo, 'TotalSize') ?? 0)
+  };
 }
 
 export async function listExternalWholeDisks(): Promise<ExternalDisk[]> {

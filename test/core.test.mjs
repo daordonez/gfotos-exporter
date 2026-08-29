@@ -9,7 +9,7 @@ import {MigrationDatabase} from '../dist/database.js';
 import {requiredBytes} from '../dist/migration.js';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout} from '../dist/takeout.js';
-import {isEligibleExternalVolume, volumeMountPath} from '../dist/volume.js';
+import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 
 const execute = promisify(execFile);
 
@@ -29,14 +29,19 @@ test('creates safe APFS volume mount paths', () => {
   assert.throws(() => volumeMountPath(''));
 });
 
-test('accepts only mounted external APFS volumes that are not Time Machine destinations', () => {
-  const eligible = {mountPoint: '/Volumes/Migration', filesystem: 'apfs', availableBytes: 100, capacityBytes: 200, isExternal: true, isReadOnly: false};
-  assert.equal(isEligibleExternalVolume(eligible), true);
-  assert.equal(isEligibleExternalVolume({...eligible, isExternal: false}), false);
-  assert.equal(isEligibleExternalVolume({...eligible, filesystem: 'exfat'}), false);
-  assert.equal(isEligibleExternalVolume({...eligible, isReadOnly: true}), false);
-  assert.equal(isEligibleExternalVolume({...eligible, mountPoint: '/System/Volumes/Data'}), false);
-  assert.equal(isEligibleExternalVolume(eligible, ['/Volumes/Migration']), false);
+test('accepts external mounted volumes regardless of their filesystem but excludes critical destinations', () => {
+  const selectable = {mountPoint: '/Volumes/Migration', filesystem: 'exfat', availableBytes: 100, capacityBytes: 200, isExternal: true, isReadOnly: false};
+  assert.equal(isSelectableExternalVolume(selectable), true);
+  assert.equal(isSelectableExternalVolume({...selectable, isExternal: false}), false);
+  assert.equal(isSelectableExternalVolume({...selectable, isReadOnly: true}), false);
+  assert.equal(isSelectableExternalVolume({...selectable, mountPoint: '/System/Volumes/Data'}), false);
+  assert.equal(isSelectableExternalVolume(selectable, ['/Volumes/Migration']), false);
+});
+
+test('resolves only a whole-disk identifier for formatting', () => {
+  assert.equal(parentWholeDiskIdentifier('disk4s2', 'disk4'), 'disk4');
+  assert.equal(parentWholeDiskIdentifier('disk4s2', undefined), 'disk4');
+  assert.throws(() => parentWholeDiskIdentifier('disk4s2', 'disk4s2'));
 });
 
 test('persists migration state by media hash', async () => {
