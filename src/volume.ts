@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {readdir} from 'node:fs/promises';
 import {run} from './system.js';
 
 export interface VolumeInfo {
@@ -7,6 +8,7 @@ export interface VolumeInfo {
   availableBytes: number;
   capacityBytes: number;
   isExternal: boolean;
+  isReadOnly: boolean;
   deviceIdentifier?: string;
 }
 
@@ -14,6 +16,10 @@ export interface ExternalDisk {
   deviceIdentifier: string;
   name: string;
   capacityBytes: number;
+}
+
+export interface ExternalVolume extends VolumeInfo {
+  name: string;
 }
 
 function xmlValue(xml: string, key: string): string | undefined {
@@ -29,6 +35,66 @@ function xmlBoolean(xml: string, key: string): boolean | undefined {
 function xmlArrayValues(xml: string, key: string): string[] {
   const array = xml.match(new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`, 'i'))?.[1] ?? '';
   return [...array.matchAll(/<string>([^<]+)<\/string>/gi)].map(match => match[1]);
+}
+
+function normalizedMountPoint(value: string): string {
+  return path.resolve(value);
+}
+
+export function isSelectableExternalVolume(volume: VolumeInfo, timeMachineMountPoints: string[] = []): boolean {
+  return volume.isExternal
+    && !volume.isReadOnly
+    && volume.mountPoint.startsWith('/Volumes/')
+    && !timeMachineMountPoints.map(normalizedMountPoint).includes(normalizedMountPoint(volume.mountPoint));
+}
+
+async function listTimeMachineMountPoints(): Promise<string[]> {
+  try {
+    const {stdout} = await run('/usr/bin/tmutil', ['destinationinfo']);
+    return [...stdout.matchAll(/^\s*Mount Point\s*:\s*(.+)$/gim)].map(match => match[1].trim());
+  } catch {
+    return [];
+  }
+}
+
+export async function listSelectableExternalVolumes(): Promise<ExternalVolume[]> {
+  const [entries, timeMachineMountPoints] = await Promise.all([
+    readdir('/Volumes', {withFileTypes: true}),
+    listTimeMachineMountPoints()
+  ]);
+  const results = await Promise.allSettled(entries
+    .filter(entry => entry.isDirectory())
+    .map(async entry => {
+      const mountPoint = path.join('/Volumes', entry.name);
+      const volume = await inspectVolume(mountPoint);
+      if (!isSelectableExternalVolume(volume, timeMachineMountPoints)) return undefined;
+      return {...volume, name: entry.name};
+    }));
+  return results
+    .filter((result): result is PromiseFulfilledResult<ExternalVolume | undefined> => result.status === 'fulfilled')
+    .map(result => result.value)
+    .filter((volume): volume is ExternalVolume => volume !== undefined)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function parentWholeDiskIdentifier(deviceIdentifier: string | undefined, parentWholeDisk: string | undefined): string {
+  const candidate = parentWholeDisk ?? deviceIdentifier?.match(/^(disk\d+)s\d+$/)?.[1];
+  if (!candidate || !/^disk\d+$/.test(candidate)) throw new Error('Unable to determine the external physical disk for the selected volume.');
+  return candidate;
+}
+
+export async function externalWholeDiskForVolume(target: string): Promise<ExternalDisk> {
+  const {stdout} = await run('/usr/sbin/diskutil', ['info', '-plist', target]);
+  const deviceIdentifier = parentWholeDiskIdentifier(xmlValue(stdout, 'DeviceIdentifier'), xmlValue(stdout, 'ParentWholeDisk'));
+  const {stdout: diskInfo} = await run('/usr/sbin/diskutil', ['info', '-plist', `/dev/${deviceIdentifier}`]);
+  if (xmlBoolean(diskInfo, 'Internal') !== false || xmlBoolean(diskInfo, 'WholeDisk') !== true) {
+    throw new Error('Only a whole external physical disk can be formatted.');
+  }
+  return {
+    deviceIdentifier,
+    name: xmlValue(diskInfo, 'MediaName') ?? xmlValue(diskInfo, 'IORegistryEntryName') ?? 'External disk',
+    capacityBytes: Number(xmlValue(diskInfo, 'TotalSize') ?? 0)
+  };
 }
 
 export async function listExternalWholeDisks(): Promise<ExternalDisk[]> {
@@ -76,6 +142,7 @@ export async function inspectVolume(target: string): Promise<VolumeInfo> {
     availableBytes,
     capacityBytes,
     isExternal: internal === false,
+    isReadOnly: xmlBoolean(diskInfo, 'ReadOnlyVolume') === true,
     deviceIdentifier: xmlValue(diskInfo, 'DeviceIdentifier')
   };
 }
