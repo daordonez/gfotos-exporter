@@ -243,7 +243,8 @@ function App(): React.JSX.Element {
         {label: 'Back', value: 'back'},
         {label: 'Cancel migration', value: 'cancel'}
       ]} onChange={value => {
-        if (value === 'back') setScreen(externalVolumes.length > 0 ? 'select-volume' : 'no-external-volume');
+        const backScreen = externalVolumes.length > 0 ? 'select-volume' : 'no-external-volume';
+        if (value === 'back') setScreen(backScreen);
         else if (value === 'cancel') setScreen('menu');
         else {
           const disk = externalDisks.find(candidate => candidate.deviceIdentifier === value);
@@ -262,7 +263,8 @@ function App(): React.JSX.Element {
           {label: 'Back', value: 'back'},
           {label: 'Cancel migration', value: 'cancel'}
         ]} onChange={value => {
-          if (value === 'back') setScreen(externalVolumes.length > 0 ? 'select-volume' : 'no-external-volume');
+          const backScreen = externalVolumes.length > 0 ? 'select-volume' : 'no-external-volume';
+          if (value === 'back') setScreen(backScreen);
           else setScreen('menu');
         }}/>
       </>}
