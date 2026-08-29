@@ -23,6 +23,12 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[index]}`;
 }
 
+function Banner(): React.JSX.Element {
+  return <Box borderStyle="round" borderColor="cyan" paddingX={1}>
+    <Text bold color="cyan">gfotos-migrator {VERSION}</Text>
+  </Box>;
+}
+
 function App(): React.JSX.Element {
   const {exit} = useApp();
   const [screen, setScreen] = useState<Screen>('checking-update');
@@ -180,7 +186,7 @@ function App(): React.JSX.Element {
   }, [screen, volumePath]);
 
   return <Box flexDirection="column" padding={1} gap={1}>
-    <Text color="cyan" bold>gfotos-migrator</Text>
+    <Banner/>
     {error && <Alert variant="error">{error}</Alert>}
     {screen === 'checking-update' && <Spinner label="Checking for updates..."/>}
     {screen === 'update-available' && availableUpdate && <><StatusMessage variant="info">{`Version ${availableUpdate.version} is available.`}</StatusMessage><Text>{`Update from ${VERSION} now?`}</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void applyUpdate()} onCancel={() => setScreen('menu')}/></>}

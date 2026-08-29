@@ -94,3 +94,13 @@ test('does not suggest draft, prerelease, malformed, or older releases', () => {
   ], '0.1.0');
   assert.equal(update, undefined);
 });
+
+test('exports version from package.json', async () => {
+  const {VERSION} = await import('../dist/version.js');
+  const {createRequire} = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const packageInfo = require('../package.json');
+  assert.equal(VERSION, packageInfo.version);
+  assert.match(VERSION, /^\d+\.\d+\.\d+/);
+});
+
