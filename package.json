@@ -1,6 +1,6 @@
 {
   "name": "gfotos-migrator",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "A safe local Google Takeout to isolated Photos library migrator for macOS.",
   "type": "module",
   "private": true,
