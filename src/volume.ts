@@ -10,6 +10,12 @@ export interface VolumeInfo {
   deviceIdentifier?: string;
 }
 
+export interface ExternalDisk {
+  deviceIdentifier: string;
+  name: string;
+  capacityBytes: number;
+}
+
 function xmlValue(xml: string, key: string): string | undefined {
   const match = xml.match(new RegExp(`<key>${key}</key>\\s*<(?:string|integer)>([^<]+)</(?:string|integer)>`, 'i'));
   return match?.[1];
@@ -18,6 +24,38 @@ function xmlValue(xml: string, key: string): string | undefined {
 function xmlBoolean(xml: string, key: string): boolean | undefined {
   const match = xml.match(new RegExp(`<key>${key}</key>\\s*<(true|false)\\s*/>`, 'i'));
   return match ? match[1].toLowerCase() === 'true' : undefined;
+}
+
+function xmlArrayValues(xml: string, key: string): string[] {
+  const array = xml.match(new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`, 'i'))?.[1] ?? '';
+  return [...array.matchAll(/<string>([^<]+)<\/string>/gi)].map(match => match[1]);
+}
+
+export async function listExternalWholeDisks(): Promise<ExternalDisk[]> {
+  const {stdout} = await run('/usr/sbin/diskutil', ['list', '-plist']);
+  const identifiers = xmlArrayValues(stdout, 'AllDisks').filter(identifier => /^disk\d+$/.test(identifier));
+  const results = await Promise.allSettled(identifiers.map(async deviceIdentifier => {
+    const {stdout: info} = await run('/usr/sbin/diskutil', ['info', '-plist', `/dev/${deviceIdentifier}`]);
+    if (xmlBoolean(info, 'Internal') !== false || xmlBoolean(info, 'WholeDisk') !== true) return undefined;
+    return {
+      deviceIdentifier,
+      name: xmlValue(info, 'MediaName') ?? xmlValue(info, 'IORegistryEntryName') ?? 'External disk',
+      capacityBytes: Number(xmlValue(info, 'TotalSize') ?? 0)
+    };
+  }));
+  return results
+    .filter((result): result is PromiseFulfilledResult<ExternalDisk | undefined> => result.status === 'fulfilled')
+    .map(result => result.value)
+    .filter((disk): disk is ExternalDisk => disk !== undefined)
+    .sort((left, right) => left.deviceIdentifier.localeCompare(right.deviceIdentifier, undefined, {numeric: true}));
+}
+
+export function volumeMountPath(volumeName: string): string {
+  const normalized = volumeName.trim();
+  if (!normalized || normalized.includes('/') || normalized === '.' || normalized === '..') {
+    throw new Error('The APFS volume name must be a non-empty name without slashes.');
+  }
+  return path.join('/Volumes', normalized);
 }
 
 export async function inspectVolume(target: string): Promise<VolumeInfo> {

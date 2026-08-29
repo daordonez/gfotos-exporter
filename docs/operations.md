@@ -2,9 +2,9 @@
 
 ## Prepare storage
 
-Use a dedicated external APFS volume. Do not use a Time Machine destination. Keep the isolated Photos library, the migration database, reports, and temporary extraction directory on this volume. The tool requires enough free space for the uncompressed Takeout media plus 20 percent headroom.
+Use a dedicated external disk. Do not use a Time Machine destination. Guided migration inventories the Takeout first, then offers to use an existing external APFS volume or to erase an external physical disk and create a new APFS volume. Keep the isolated Photos library, the migration database, reports, and temporary extraction directory on this volume. The tool requires enough free space for the uncompressed Takeout media plus 20 percent headroom.
 
-`prepare-volume` is optional and destructive. It only accepts an external whole-disk identifier and requires an exact confirmation. Verify the disk in Disk Utility before running it.
+The guided preparation path lists eligible external physical disks, shows their identifiers, names, and capacities, and requires the selected identifier to be typed exactly before erasing it. It validates the new APFS volume and its free space after formatting. `prepare-volume` remains available as the equivalent advanced command for scripted workflows.
 
 ## Create the isolated library
 
@@ -19,7 +19,7 @@ The guided migration waits for this library before it starts importing.
 
 ## Permissions
 
-The first Photos import triggers a macOS Automation permission request for the terminal application. Approve it only after verifying the isolated library is open. If macOS blocks protected-library inspection, grant Full Disk Access to the terminal application in Privacy & Security and rerun `doctor`.
+Guided migration checks ExifTool and offers to install it through Homebrew when it is missing. The first Photos import triggers a macOS Automation permission request for the terminal application. Approve it only after verifying the isolated library is open. If macOS blocks protected-library inspection, grant Full Disk Access to the terminal application in Privacy & Security and rerun `doctor`.
 
 ## Recovery
 

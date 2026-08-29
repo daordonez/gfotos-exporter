@@ -23,3 +23,7 @@ export async function exifToolAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+export async function installExifTool(): Promise<void> {
+  await run('/usr/bin/env', ['brew', 'install', 'exiftool']);
+}
