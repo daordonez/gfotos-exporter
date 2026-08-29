@@ -27,3 +27,7 @@ The importer rejects unsafe paths, archives with too many entries, and oversized
 ## Migration was interrupted
 
 Run `status` and `report`. Imported items are skipped on a subsequent import because the database recognizes their SHA-256 hash. Unknown items require manual review to avoid duplicates.
+
+## Update check or installation fails
+
+The update check is optional and does not affect migration. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset, then launch guided migration again.

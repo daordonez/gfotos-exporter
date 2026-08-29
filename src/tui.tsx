@@ -7,10 +7,12 @@ import {exifToolAvailable, installExifTool} from './media.js';
 import {importCandidates, initializePaths, requiredBytes, type ImportProgress} from './migration.js';
 import {openPhotosLibrary} from './photos.js';
 import {inventoryTakeout} from './takeout.js';
+import {checkForUpdate, installUpdate, type AvailableUpdate} from './updates.js';
+import {VERSION} from './version.js';
 import {eraseExternalDisk, externalWholeDiskForVolume, listExternalWholeDisks, listSelectableExternalVolumes, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
 import type {MediaCandidate, TakeoutInventory} from './domain.js';
 
-type Screen = 'menu' | 'source' | 'storage' | 'select-volume' | 'select-disk' | 'volume-name' | 'erase-confirmation' | 'formatting' | 'dependency' | 'installing-dependency' | 'library' | 'confirm' | 'running' | 'complete' | 'no-external-volume';
+type Screen = 'checking-update' | 'update-available' | 'updating' | 'update-complete' | 'menu' | 'source' | 'storage' | 'select-volume' | 'select-disk' | 'volume-name' | 'erase-confirmation' | 'formatting' | 'dependency' | 'installing-dependency' | 'library' | 'confirm' | 'running' | 'complete' | 'no-external-volume';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -23,7 +25,7 @@ function formatBytes(bytes: number): string {
 
 function App(): React.JSX.Element {
   const {exit} = useApp();
-  const [screen, setScreen] = useState<Screen>('menu');
+  const [screen, setScreen] = useState<Screen>('checking-update');
   const [sourcePath, setSourcePath] = useState('');
   const [volumePath, setVolumePath] = useState('');
   const [volumeName, setVolumeName] = useState('GPhotos_Export');
@@ -35,6 +37,36 @@ function App(): React.JSX.Element {
   const [error, setError] = useState<string>();
   const [progress, setProgress] = useState<ImportProgress>();
   const [libraryReady, setLibraryReady] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
+
+  const checkUpdates = async (): Promise<void> => {
+    try {
+      const update = await checkForUpdate(VERSION);
+      if (update) {
+        setAvailableUpdate(update);
+        setScreen('update-available');
+        return;
+      }
+    } catch {
+      // A release lookup failure must not block a local migration.
+    }
+    setScreen('menu');
+  };
+
+  const applyUpdate = async (): Promise<void> => {
+    if (!availableUpdate) return;
+    try {
+      setError(undefined);
+      setScreen('updating');
+      await installUpdate(availableUpdate);
+      setScreen('update-complete');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      setScreen('update-available');
+    }
+  };
+
+  useEffect(() => { void checkUpdates(); }, []);
 
   const continueAfterStorage = async (): Promise<void> => {
     if (await exifToolAvailable()) setScreen('library');
@@ -147,6 +179,10 @@ function App(): React.JSX.Element {
   return <Box flexDirection="column" padding={1} gap={1}>
     <Text color="cyan" bold>gfotos-migrator</Text>
     {error && <Alert variant="error">{error}</Alert>}
+    {screen === 'checking-update' && <Spinner label="Checking for updates..."/>}
+    {screen === 'update-available' && availableUpdate && <><StatusMessage variant="info">{`Version ${availableUpdate.version} is available.`}</StatusMessage><Text>{`Update from ${VERSION} now?`}</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void applyUpdate()} onCancel={() => setScreen('menu')}/></>}
+    {screen === 'updating' && <Spinner label="Downloading and installing the update..."/>}
+    {screen === 'update-complete' && <><StatusMessage variant="success">Update installed successfully.</StatusMessage><Text>Restart gfotos-migrator to use the new version.</Text><ConfirmInput defaultChoice="confirm" onConfirm={() => process.exit(0)} onCancel={() => process.exit(0)}/></>}
     {screen === 'menu' && <>
       <Text>Safe Google Takeout migration to an isolated Photos library.</Text>
       <Select options={[{label: 'Start guided migration', value: 'start'}, {label: 'Exit', value: 'exit'}]} onChange={value => {
