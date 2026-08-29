@@ -66,28 +66,16 @@ export function findAvailableUpdate(releases: GitHubRelease[], currentVersion: s
   return newest;
 }
 
-function requestHeaders(token: string | undefined, accept: string): Record<string, string> {
+function requestHeaders(accept: string): Record<string, string> {
   return {
     Accept: accept,
-    'X-GitHub-Api-Version': API_VERSION,
-    ...(token ? {Authorization: `Bearer ${token}`} : {})
+    'X-GitHub-Api-Version': API_VERSION
   };
 }
 
-async function githubToken(): Promise<string | undefined> {
-  const environmentToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  if (environmentToken) return environmentToken;
-  try {
-    const result = await run('gh', ['auth', 'token']);
-    return result.stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function fetchReleases(token: string | undefined): Promise<GitHubRelease[]> {
+async function fetchReleases(): Promise<GitHubRelease[]> {
   const response = await fetch(RELEASES_URL, {
-    headers: requestHeaders(token, 'application/vnd.github+json'),
+    headers: requestHeaders('application/vnd.github+json'),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`GitHub release check failed with HTTP ${response.status}.`);
@@ -95,14 +83,12 @@ async function fetchReleases(token: string | undefined): Promise<GitHubRelease[]
 }
 
 export async function checkForUpdate(currentVersion: string): Promise<AvailableUpdate | undefined> {
-  const token = await githubToken();
-  return findAvailableUpdate(await fetchReleases(token), currentVersion);
+  return findAvailableUpdate(await fetchReleases(), currentVersion);
 }
 
 export async function installUpdate(update: AvailableUpdate): Promise<void> {
-  const token = await githubToken();
   const response = await fetch(`${ASSETS_URL}/${update.assetId}`, {
-    headers: requestHeaders(token, 'application/octet-stream'),
+    headers: requestHeaders('application/octet-stream'),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`GitHub package download failed with HTTP ${response.status}.`);

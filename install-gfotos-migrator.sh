@@ -25,61 +25,6 @@ fail() {
   exit 1
 }
 
-usage() {
-  printf 'Usage: %s [--GHTOKEN <github-token>]\n' "$(basename "$0")" >&2
-  printf 'If omitted, the token is requested securely at runtime.\n' >&2
-  exit 64
-}
-
-read_github_token() {
-  local character
-  local token_received=false
-
-  if [ ! -t 0 ]; then
-    fail "A GitHub token must be passed with --GHTOKEN when standard input is not interactive."
-  fi
-
-  GITHUB_TOKEN=""
-  printf 'GitHub token: ' >&2
-
-  while true; do
-    if ! IFS= read -r -s -n 1 character; then
-      break
-    fi
-
-    [ -n "$character" ] || break
-    GITHUB_TOKEN="${GITHUB_TOKEN}${character}"
-
-    if [ "$token_received" = false ]; then
-      printf '*****' >&2
-      token_received=true
-    fi
-  done
-
-  printf '\n' >&2
-
-  if [ -z "$GITHUB_TOKEN" ]; then
-    fail "No GitHub token was provided. Installation cancelled."
-  fi
-}
-
-parse_arguments() {
-  case "$#" in
-    0)
-      read_github_token
-      ;;
-    2)
-      [ "$1" = "--GHTOKEN" ] || usage
-      GITHUB_TOKEN="$2"
-      ;;
-    *)
-      usage
-      ;;
-  esac
-
-  [ -n "$GITHUB_TOKEN" ] || fail "No GitHub token was provided. Installation cancelled."
-}
-
 require_supported_platform() {
   case "$(uname -s)" in
     Darwin|Linux) ;;
@@ -300,7 +245,6 @@ github_api_get() {
   local destination="$3"
 
   curl --fail --location --retry 3 \
-    --header "Authorization: Bearer ${GITHUB_TOKEN}" \
     --header "Accept: ${accept_header}" \
     --header "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
     --output "$destination" \
@@ -397,7 +341,7 @@ install_package() {
 }
 
 main() {
-  parse_arguments "$@"
+  [ "$#" -eq 0 ] || fail "This installer does not accept arguments."
   require_supported_platform
   ensure_node_and_npm
   ensure_exiftool

@@ -26,4 +26,4 @@ Run `status` and `report`. Imported items are skipped on a subsequent import bec
 
 ## Update check or installation fails
 
-The update check is optional and does not affect migration. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset. For a private repository, set `GITHUB_TOKEN` or `GH_TOKEN` with a fine-grained `Contents: Read` token, or run `gh auth login`, then launch guided migration again.
+The update check is optional and does not affect migration. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset, then launch guided migration again.
