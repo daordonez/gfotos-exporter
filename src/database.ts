@@ -1,4 +1,4 @@
-import {DatabaseSync} from 'node:sqlite';
+import type {DatabaseSync} from 'node:sqlite';
 import path from 'node:path';
 import {ensureDirectory} from './system.js';
 import type {MediaKind, MigrationItem, MigrationStatus} from './domain.js';
@@ -8,11 +8,12 @@ export class MigrationDatabase {
 
   static async open(databasePath: string): Promise<MigrationDatabase> {
     await ensureDirectory(path.dirname(databasePath));
-    return new MigrationDatabase(databasePath);
+    const {DatabaseSync} = await import('node:sqlite');
+    return new MigrationDatabase(new DatabaseSync(databasePath));
   }
 
-  private constructor(databasePath: string) {
-    this.database = new DatabaseSync(databasePath);
+  private constructor(database: DatabaseSync) {
+    this.database = database;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS migration_items (
