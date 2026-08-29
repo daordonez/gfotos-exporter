@@ -3,9 +3,8 @@
 set -euo pipefail
 
 readonly REPOSITORY="daordonez/gfotos-exporter"
-readonly RELEASE_VERSION="0.0.0"
-readonly PACKAGE_NAME="gfotos-migrator-${RELEASE_VERSION}.tgz"
-readonly RELEASE_API_URL="https://api.github.com/repos/${REPOSITORY}/releases/tags/v${RELEASE_VERSION}"
+readonly RELEASES_API_URL="https://api.github.com/repos/${REPOSITORY}/releases?per_page=3"
+readonly RELEASE_API_BASE_URL="https://api.github.com/repos/${REPOSITORY}/releases/tags"
 readonly RELEASE_ASSET_API_URL="https://api.github.com/repos/${REPOSITORY}/releases/assets"
 readonly GITHUB_API_VERSION="2022-11-28"
 readonly REQUIRED_NODE_MAJOR=22
@@ -13,6 +12,9 @@ readonly REQUIRED_NODE_MINOR=13
 readonly NODE_VERSION="22.13.0"
 readonly USER_PREFIX="${HOME}/.local"
 readonly NODE_INSTALL_ROOT="${USER_PREFIX}/opt/gfotos-migrator/node-v${NODE_VERSION}"
+
+SELECTED_RELEASE_TAG=""
+SELECTED_PACKAGE_NAME=""
 
 log() {
   printf '%s\n' "[gfotos-migrator] $*"
@@ -292,19 +294,78 @@ ensure_exiftool() {
   command -v exiftool >/dev/null 2>&1 || fail "ExifTool installation did not complete successfully."
 }
 
-download_release() {
-  local destination="$1"
-  local metadata_path asset_id
+github_api_get() {
+  local url="$1"
+  local accept_header="$2"
+  local destination="$3"
 
-  metadata_path="$(mktemp)"
-
-  log "Downloading gfotos-migrator ${RELEASE_VERSION}."
   curl --fail --location --retry 3 \
     --header "Authorization: Bearer ${GITHUB_TOKEN}" \
-    --header "Accept: application/vnd.github+json" \
+    --header "Accept: ${accept_header}" \
     --header "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-    --output "$metadata_path" \
-    "$RELEASE_API_URL"
+    --output "$destination" \
+    "$url"
+}
+
+select_release() {
+  local metadata_path candidates_path release_count selected_option tag published_at
+  local -a release_tags
+
+  metadata_path="$(mktemp)"
+  candidates_path="$(mktemp)"
+
+  log "Retrieving available releases."
+  github_api_get "$RELEASES_API_URL" "application/vnd.github+json" "$metadata_path"
+
+  node --input-type=module --eval '
+    import { readFileSync } from "node:fs";
+    const releases = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    for (const release of releases.filter(({ draft }) => !draft).slice(0, 3)) {
+      process.stdout.write(`${release.tag_name}\t${release.published_at || release.created_at}\n`);
+    }
+  ' "$metadata_path" > "$candidates_path"
+  rm -f "$metadata_path"
+
+  release_count=0
+  printf '\nAvailable releases (newest first):\n' >&2
+  while IFS=$'\t' read -r tag published_at; do
+    release_count=$((release_count + 1))
+    release_tags[$release_count]="$tag"
+    printf '%s) %s (%s)\n' "$release_count" "$tag" "$published_at" >&2
+  done < "$candidates_path"
+  rm -f "$candidates_path"
+
+  [ "$release_count" -gt 0 ] || fail "No published releases are available."
+
+  selected_option=1
+  if [ -t 0 ]; then
+    printf 'Select a release [1]: ' >&2
+    IFS= read -r selected_option || selected_option=""
+    selected_option="${selected_option:-1}"
+  else
+    log "No interactive terminal detected. Selecting the newest release: ${release_tags[1]}."
+  fi
+
+  case "$selected_option" in
+    *[!0-9]*|'') fail "The release selection must be a number between 1 and ${release_count}." ;;
+  esac
+
+  [ "$selected_option" -ge 1 ] && [ "$selected_option" -le "$release_count" ] || fail "The release selection must be a number between 1 and ${release_count}."
+
+  SELECTED_RELEASE_TAG="${release_tags[$selected_option]}"
+  SELECTED_PACKAGE_NAME="gfotos-migrator-${SELECTED_RELEASE_TAG#v}.tgz"
+  log "Selected release: ${SELECTED_RELEASE_TAG}."
+}
+
+download_release() {
+  local destination="$1"
+  local metadata_path asset_id release_api_url
+
+  metadata_path="$(mktemp)"
+  release_api_url="${RELEASE_API_BASE_URL}/${SELECTED_RELEASE_TAG}"
+
+  log "Downloading gfotos-migrator ${SELECTED_RELEASE_TAG}."
+  github_api_get "$release_api_url" "application/vnd.github+json" "$metadata_path"
 
   asset_id="$(node --input-type=module --eval '
     import { readFileSync } from "node:fs";
@@ -313,23 +374,18 @@ download_release() {
     const asset = release.assets.find(({ name }) => name === packageName);
     if (!asset) process.exit(2);
     process.stdout.write(String(asset.id));
-  ' "$metadata_path" "$PACKAGE_NAME")"
+  ' "$metadata_path" "$SELECTED_PACKAGE_NAME")"
   rm -f "$metadata_path"
 
   [ -n "$asset_id" ] || fail "The requested release asset was not found."
 
-  curl --fail --location --retry 3 \
-    --header "Authorization: Bearer ${GITHUB_TOKEN}" \
-    --header "Accept: application/octet-stream" \
-    --header "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
-    --output "$destination" \
-    "${RELEASE_ASSET_API_URL}/${asset_id}"
+  github_api_get "${RELEASE_ASSET_API_URL}/${asset_id}" "application/octet-stream" "$destination"
 }
 
 install_package() {
   local temporary_directory package_path
   temporary_directory="$(mktemp -d)"
-  package_path="${temporary_directory}/${PACKAGE_NAME}"
+  package_path="${temporary_directory}/${SELECTED_PACKAGE_NAME}"
   trap 'rm -rf "$temporary_directory"' EXIT
 
   download_release "$package_path"
@@ -345,6 +401,7 @@ main() {
   require_supported_platform
   ensure_node_and_npm
   ensure_exiftool
+  select_release
   install_package
 
   log "Installation completed successfully."
