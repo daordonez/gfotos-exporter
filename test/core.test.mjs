@@ -9,7 +9,7 @@ import {MigrationDatabase} from '../dist/database.js';
 import {requiredBytes} from '../dist/migration.js';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout} from '../dist/takeout.js';
-import {volumeMountPath} from '../dist/volume.js';
+import {isEligibleExternalVolume, volumeMountPath} from '../dist/volume.js';
 
 const execute = promisify(execFile);
 
@@ -27,6 +27,16 @@ test('creates safe APFS volume mount paths', () => {
   assert.equal(volumeMountPath('Google Migration'), '/Volumes/Google Migration');
   assert.throws(() => volumeMountPath('../unsafe'));
   assert.throws(() => volumeMountPath(''));
+});
+
+test('accepts only mounted external APFS volumes that are not Time Machine destinations', () => {
+  const eligible = {mountPoint: '/Volumes/Migration', filesystem: 'apfs', availableBytes: 100, capacityBytes: 200, isExternal: true, isReadOnly: false};
+  assert.equal(isEligibleExternalVolume(eligible), true);
+  assert.equal(isEligibleExternalVolume({...eligible, isExternal: false}), false);
+  assert.equal(isEligibleExternalVolume({...eligible, filesystem: 'exfat'}), false);
+  assert.equal(isEligibleExternalVolume({...eligible, isReadOnly: true}), false);
+  assert.equal(isEligibleExternalVolume({...eligible, mountPoint: '/System/Volumes/Data'}), false);
+  assert.equal(isEligibleExternalVolume(eligible, ['/Volumes/Migration']), false);
 });
 
 test('persists migration state by media hash', async () => {

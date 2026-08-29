@@ -4,6 +4,8 @@
 
 Use a dedicated external disk. Do not use a Time Machine destination. Guided migration inventories the Takeout first, then offers to use an existing external APFS volume or to erase an external physical disk and create a new APFS volume. Keep the isolated Photos library, the migration database, reports, and temporary extraction directory on this volume. The tool requires enough free space for the uncompressed Takeout media plus 20 percent headroom.
 
+When using an existing destination, guided migration lists eligible external APFS volumes and their available capacity instead of requesting a path. It excludes internal system volumes, Time Machine destinations, non-APFS volumes, and volumes with insufficient space. If no eligible volume is connected, guided migration reports the condition and exits without making changes.
+
 The guided preparation path lists eligible external physical disks, shows their identifiers, names, and capacities, and requires the selected identifier to be typed exactly before erasing it. It validates the new APFS volume and its free space after formatting. `prepare-volume` remains available as the equivalent advanced command for scripted workflows.
 
 ## Create the isolated library

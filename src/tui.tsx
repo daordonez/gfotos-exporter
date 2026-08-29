@@ -1,16 +1,16 @@
 import path from 'node:path';
 import {exists} from './system.js';
 import React, {useEffect, useState} from 'react';
-import {Box, render, Text} from 'ink';
+import {Box, render, Text, useApp} from 'ink';
 import {Alert, ConfirmInput, ProgressBar, Select, Spinner, StatusMessage, TextInput} from '@inkjs/ui';
 import {exifToolAvailable, installExifTool} from './media.js';
 import {importCandidates, initializePaths, requiredBytes, type ImportProgress} from './migration.js';
 import {openPhotosLibrary} from './photos.js';
 import {inventoryTakeout} from './takeout.js';
-import {eraseExternalDisk, listExternalWholeDisks, validateExternalApfs, volumeMountPath, type ExternalDisk} from './volume.js';
+import {eraseExternalDisk, listEligibleExternalVolumes, listExternalWholeDisks, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
 import type {MediaCandidate, TakeoutInventory} from './domain.js';
 
-type Screen = 'menu' | 'source' | 'storage' | 'existing-volume' | 'select-disk' | 'volume-name' | 'erase-confirmation' | 'formatting' | 'dependency' | 'installing-dependency' | 'library' | 'confirm' | 'running' | 'complete';
+type Screen = 'menu' | 'source' | 'storage' | 'select-volume' | 'select-disk' | 'volume-name' | 'erase-confirmation' | 'formatting' | 'dependency' | 'installing-dependency' | 'library' | 'confirm' | 'running' | 'complete' | 'no-external-volume';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -22,12 +22,14 @@ function formatBytes(bytes: number): string {
 }
 
 function App(): React.JSX.Element {
+  const {exit} = useApp();
   const [screen, setScreen] = useState<Screen>('menu');
   const [sourcePath, setSourcePath] = useState('');
   const [volumePath, setVolumePath] = useState('');
   const [volumeName, setVolumeName] = useState('GoogleMigration');
   const [selectedDisk, setSelectedDisk] = useState<ExternalDisk>();
   const [externalDisks, setExternalDisks] = useState<ExternalDisk[]>([]);
+  const [externalVolumes, setExternalVolumes] = useState<ExternalVolume[]>([]);
   const [inventory, setInventory] = useState<TakeoutInventory>();
   const [candidates, setCandidates] = useState<MediaCandidate[]>([]);
   const [error, setError] = useState<string>();
@@ -52,21 +54,32 @@ function App(): React.JSX.Element {
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
 
-  const inspectVolume = async (value: string): Promise<void> => {
+  const selectVolume = async (volume: ExternalVolume): Promise<void> => {
     try {
       if (!inventory) return;
       setError(undefined);
-      await validateExternalApfs(value.trim(), requiredBytes(inventory));
-      setVolumePath(path.resolve(value.trim()));
+      await validateExternalApfs(volume.mountPoint, requiredBytes(inventory));
+      setVolumePath(volume.mountPoint);
       await continueAfterStorage();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+  };
+
+  const loadExternalVolumes = async (): Promise<void> => {
+    try {
+      if (!inventory) return;
+      setError(undefined);
+      const volumes = await listEligibleExternalVolumes(requiredBytes(inventory));
+      setExternalVolumes(volumes);
+      setScreen(volumes.length > 0 ? 'select-volume' : 'no-external-volume');
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
 
   const loadExternalDisks = async (): Promise<void> => {
     try {
       setError(undefined);
-      setExternalDisks(await listExternalWholeDisks());
-      setScreen('select-disk');
+      const disks = await listExternalWholeDisks();
+      setExternalDisks(disks);
+      setScreen(disks.length > 0 ? 'select-disk' : 'no-external-volume');
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   };
 
@@ -118,6 +131,12 @@ function App(): React.JSX.Element {
     return () => clearInterval(interval);
   }, [screen, volumePath]);
 
+  useEffect(() => {
+    if (screen !== 'no-external-volume') return;
+    const timeout = setTimeout(() => exit(), 1500);
+    return () => clearTimeout(timeout);
+  }, [exit, screen]);
+
   return <Box flexDirection="column" padding={1} gap={1}>
     <Text color="cyan" bold>gfotos-migrator</Text>
     {error && <Alert variant="error">{error}</Alert>}
@@ -139,11 +158,19 @@ function App(): React.JSX.Element {
         {label: 'Cancel migration', value: 'cancel'}
       ]} onChange={value => {
         if (value === 'prepare') void loadExternalDisks();
-        else if (value === 'existing') setScreen('existing-volume');
+        else if (value === 'existing') void loadExternalVolumes();
         else setScreen('menu');
       }}/>
     </>}
-    {screen === 'existing-volume' && <><Text>Enter the mounted path of the external APFS volume:</Text><TextInput placeholder="/Volumes/GoogleMigration" onSubmit={inspectVolume}/></>}
+    {screen === 'select-volume' && <>
+      <Text bold>Select the external APFS volume for the isolated migration library.</Text>
+      <Text dimColor>System volumes, Time Machine destinations, non-APFS volumes, and volumes without enough free space are excluded.</Text>
+      <Select visibleOptionCount={8} options={externalVolumes.map(volume => ({label: `${volume.name} — ${formatBytes(volume.availableBytes)} free of ${formatBytes(volume.capacityBytes)}`, value: volume.mountPoint}))} onChange={mountPoint => {
+        const volume = externalVolumes.find(candidate => candidate.mountPoint === mountPoint);
+        if (volume) void selectVolume(volume);
+      }}/>
+    </>}
+    {screen === 'no-external-volume' && <StatusMessage variant="warning">No eligible external storage was found. Connect an external APFS volume with enough free space and restart guided migration.</StatusMessage>}
     {screen === 'select-disk' && <>
       <Text bold>Select the external physical disk to erase and format as APFS.</Text>
       <Text color="red">All data on the selected disk will be permanently erased.</Text>

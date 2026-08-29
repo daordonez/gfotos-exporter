@@ -43,6 +43,8 @@ gfotos-migrator guided-migration
 
 La fototeca de destino es `GoogleTakeoutMigration.photoslibrary`. Debe permanecer fuera de iCloud Photos y no puede ser la Fototeca del Sistema. Los ZIP de Takeout se tratan como entrada de solo lectura.
 
+When selecting an existing destination, guided migration lists eligible external APFS volumes and shows their free capacity. It excludes system volumes, Time Machine destinations, non-APFS volumes, and volumes without sufficient free space. If no eligible volume is connected, the guided migration ends without changing any disk.
+
 Para borrar y preparar un disco externo, usa `prepare-volume` únicamente después de verificar el identificador con Utilidad de Discos o `diskutil list`: esta operación elimina todo el contenido del disco seleccionado.
 
 ## Desarrollo

@@ -8,6 +8,10 @@ Install it with `brew install exiftool`, then rerun `gfotos-migrator doctor`.
 
 The migration requires external APFS storage. The selected path may be internal, formatted as a non-APFS filesystem, mounted read-only, or have insufficient free capacity.
 
+## No eligible external volume is listed
+
+Connect an external APFS volume with enough free capacity and restart guided migration. System volumes and configured Time Machine destinations are intentionally excluded. Use the separate disk-preparation option only when you have verified that erasing the selected external physical disk is safe.
+
 ## Photos import is denied
 
 Open System Settings, review Privacy & Security > Automation, and allow the terminal application to control Photos. Confirm that the isolated library, not the main library, is open before retrying.
