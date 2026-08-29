@@ -5,6 +5,7 @@ import {createRequire} from 'node:module';
 import {promisify} from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {MigrationDatabase} from '../dist/database.js';
 import {requiredBytes} from '../dist/migration.js';
@@ -85,6 +86,17 @@ test('selects the newest stable release with its matching package', () => {
     {tag_name: 'v0.3.0', draft: false, prerelease: false, assets: []}
   ], '0.1.0');
   assert.deepEqual(update, {version: '0.2.0', assetId: 13, packageName: 'gfotos-migrator-0.2.0.tgz'});
+});
+
+test('importing database module does not emit the node:sqlite experimental warning', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const databasePath = path.join(root, 'dist', 'database.js');
+  const {stderr} = await new Promise((resolve, reject) => {
+    execFile(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(databasePath)})`], {encoding: 'utf8'}, (err, stdout, stderr) => {
+      if (err) reject(err); else resolve({stdout, stderr});
+    });
+  });
+  assert.ok(!(stderr.includes('ExperimentalWarning') && stderr.includes('SQLite')), `Unexpected SQLite warning on stderr: ${stderr}`);
 });
 
 test('does not suggest draft, prerelease, malformed, or older releases', () => {
