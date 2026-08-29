@@ -28,22 +28,35 @@ usage() {
 }
 
 read_github_token() {
+  local character
+  local token_received=false
+
   if [ ! -t 0 ]; then
     fail "A GitHub token must be passed with --GHTOKEN when standard input is not interactive."
   fi
 
+  GITHUB_TOKEN=""
   printf 'GitHub token: ' >&2
-  if ! IFS= read -r -s GITHUB_TOKEN; then
-    printf '\n' >&2
-    fail "No GitHub token was provided. Installation cancelled."
-  fi
+
+  while true; do
+    if ! IFS= read -r -s -n 1 character; then
+      break
+    fi
+
+    [ -n "$character" ] || break
+    GITHUB_TOKEN="${GITHUB_TOKEN}${character}"
+
+    if [ "$token_received" = false ]; then
+      printf '*****' >&2
+      token_received=true
+    fi
+  done
+
   printf '\n' >&2
 
   if [ -z "$GITHUB_TOKEN" ]; then
     fail "No GitHub token was provided. Installation cancelled."
   fi
-
-  printf '*****\n' >&2
 }
 
 parse_arguments() {
