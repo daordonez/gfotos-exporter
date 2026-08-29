@@ -1,0 +1,27 @@
+# Changelog
+
+## 1.0.0 (2026-08-29)
+
+
+### Features
+
+* add gfotos-migrator CLI tool for Google Takeout migration ([bcae045](https://github.com/daordonez/gfotos-exporter/commit/bcae045b998dfc66dfdd57888a2403e3f138a4a7))
+* add guided GitHub release installer ([133d0da](https://github.com/daordonez/gfotos-exporter/commit/133d0da95e84c5d1d889990c732182a42e628d42))
+* add guided GitHub release installer ([f5e2a96](https://github.com/daordonez/gfotos-exporter/commit/f5e2a96b93b2c15e9124a9df7cf613f15d3c657d))
+* format selected external volumes as APFS ([27dbd47](https://github.com/daordonez/gfotos-exporter/commit/27dbd47b504b5d435ce646f596c8d29b51fb6e90))
+* guide external migration storage setup ([3dda08d](https://github.com/daordonez/gfotos-exporter/commit/3dda08db30dd99915b7f820ef81fcd11f40a1781))
+* list eligible external migration volumes ([c72a525](https://github.com/daordonez/gfotos-exporter/commit/c72a525f49924fd6aa3a5c0560e9ef8a43ad61d5))
+* select and format external migration volumes ([f3ecf28](https://github.com/daordonez/gfotos-exporter/commit/f3ecf28eda6c10406496a0e40120e263c102189f))
+* select release during installation ([75a4cd8](https://github.com/daordonez/gfotos-exporter/commit/75a4cd8c36f30051e44e06e0b50be6cd9cade856))
+* select release during installation ([5477d42](https://github.com/daordonez/gfotos-exporter/commit/5477d42ccb00a7caa33f1937967f259f362eaa60))
+
+
+### Bug Fixes
+
+* confirm interactive token input ([e935521](https://github.com/daordonez/gfotos-exporter/commit/e935521ddd3f563329b69c7d305801b232060772))
+* confirm interactive token input ([aae1492](https://github.com/daordonez/gfotos-exporter/commit/aae14924b912b48a33875d0e0e6fcf044215e1d3))
+* disable implicit package manager cache ([c1eb923](https://github.com/daordonez/gfotos-exporter/commit/c1eb9239f35b287fed61f68f292c3f44425b8e77))
+* download private release assets through API ([8930e81](https://github.com/daordonez/gfotos-exporter/commit/8930e81bff194b56673738f8a0be2a90f602347c))
+* initialize pnpm after Node setup ([3b86a13](https://github.com/daordonez/gfotos-exporter/commit/3b86a13b9ac9d7b31aca23aebe3bd29a66f62abe))
+* install pinned pnpm in workflows ([b0d5ddd](https://github.com/daordonez/gfotos-exporter/commit/b0d5dddb0eae2ce8c638a5d558f78b9a422b51b2))
+* show token mask during interactive input ([b7aaed6](https://github.com/daordonez/gfotos-exporter/commit/b7aaed6c731dcfa8dd7de2d227164243ac39ddac))

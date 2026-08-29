@@ -35,6 +35,8 @@ When guided migration starts, the tool checks published GitHub Releases and offe
 
 The target library is `GoogleTakeoutMigration.photoslibrary`. It must remain outside iCloud Photos and cannot be the System Photo Library. Takeout ZIP archives are treated as read-only input.
 
+When selecting a destination, guided migration lists mounted external volumes and shows their filesystem and free capacity. It excludes system volumes, Time Machine destinations, and read-only volumes. A non-APFS volume, or an APFS volume without enough space, can be erased and converted to APFS only after exact whole-disk confirmation. The default descriptive volume name is `GPhotos_Export` and can be changed before formatting. If no selectable volume is connected, guided migration ends without changing any disk.
+
 To erase and prepare an external disk, use `prepare-volume` only after confirming its identifier in Disk Utility or with `diskutil list`: this operation deletes all contents of the selected disk.
 
 ## Development
