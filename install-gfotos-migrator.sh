@@ -5,7 +5,9 @@ set -euo pipefail
 readonly REPOSITORY="daordonez/gfotos-exporter"
 readonly RELEASE_VERSION="0.0.0"
 readonly PACKAGE_NAME="gfotos-migrator-${RELEASE_VERSION}.tgz"
-readonly PACKAGE_URL="https://github.com/${REPOSITORY}/releases/download/v${RELEASE_VERSION}/${PACKAGE_NAME}"
+readonly RELEASE_API_URL="https://api.github.com/repos/${REPOSITORY}/releases/tags/v${RELEASE_VERSION}"
+readonly RELEASE_ASSET_API_URL="https://api.github.com/repos/${REPOSITORY}/releases/assets"
+readonly GITHUB_API_VERSION="2022-11-28"
 readonly REQUIRED_NODE_MAJOR=22
 readonly REQUIRED_NODE_MINOR=13
 readonly NODE_VERSION="22.13.0"
@@ -28,13 +30,35 @@ usage() {
 }
 
 read_github_token() {
+  local character
+  local token_received=false
+
   if [ ! -t 0 ]; then
     fail "A GitHub token must be passed with --GHTOKEN when standard input is not interactive."
   fi
 
+  GITHUB_TOKEN=""
   printf 'GitHub token: ' >&2
-  IFS= read -r -s GITHUB_TOKEN
+
+  while true; do
+    if ! IFS= read -r -s -n 1 character; then
+      break
+    fi
+
+    [ -n "$character" ] || break
+    GITHUB_TOKEN="${GITHUB_TOKEN}${character}"
+
+    if [ "$token_received" = false ]; then
+      printf '*****' >&2
+      token_received=true
+    fi
+  done
+
   printf '\n' >&2
+
+  if [ -z "$GITHUB_TOKEN" ]; then
+    fail "No GitHub token was provided. Installation cancelled."
+  fi
 }
 
 parse_arguments() {
@@ -51,7 +75,7 @@ parse_arguments() {
       ;;
   esac
 
-  [ -n "$GITHUB_TOKEN" ] || fail "The GitHub token cannot be empty."
+  [ -n "$GITHUB_TOKEN" ] || fail "No GitHub token was provided. Installation cancelled."
 }
 
 require_supported_platform() {
@@ -270,13 +294,36 @@ ensure_exiftool() {
 
 download_release() {
   local destination="$1"
+  local metadata_path asset_id
+
+  metadata_path="$(mktemp)"
 
   log "Downloading gfotos-migrator ${RELEASE_VERSION}."
   curl --fail --location --retry 3 \
     --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+    --header "Accept: application/vnd.github+json" \
+    --header "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
+    --output "$metadata_path" \
+    "$RELEASE_API_URL"
+
+  asset_id="$(node --input-type=module --eval '
+    import { readFileSync } from "node:fs";
+    const [metadataPath, packageName] = process.argv.slice(1);
+    const release = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const asset = release.assets.find(({ name }) => name === packageName);
+    if (!asset) process.exit(2);
+    process.stdout.write(String(asset.id));
+  ' "$metadata_path" "$PACKAGE_NAME")"
+  rm -f "$metadata_path"
+
+  [ -n "$asset_id" ] || fail "The requested release asset was not found."
+
+  curl --fail --location --retry 3 \
+    --header "Authorization: Bearer ${GITHUB_TOKEN}" \
     --header "Accept: application/octet-stream" \
+    --header "X-GitHub-Api-Version: ${GITHUB_API_VERSION}" \
     --output "$destination" \
-    "$PACKAGE_URL"
+    "${RELEASE_ASSET_API_URL}/${asset_id}"
 }
 
 install_package() {
