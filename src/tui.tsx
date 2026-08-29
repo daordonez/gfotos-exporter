@@ -8,7 +8,7 @@ import {importCandidates, initializePaths, requiredBytes, type ImportProgress} f
 import {openPhotosLibrary} from './photos.js';
 import {inventoryTakeout} from './takeout.js';
 import {checkForUpdate, installUpdate, type AvailableUpdate} from './updates.js';
-import {VERSION} from './version.js';
+import {VERSION, PACKAGE_NAME} from './version.js';
 import {eraseExternalDisk, externalWholeDiskForVolume, listExternalWholeDisks, listSelectableExternalVolumes, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
 import type {MediaCandidate, TakeoutInventory} from './domain.js';
 
@@ -25,7 +25,7 @@ function formatBytes(bytes: number): string {
 
 function Banner(): React.JSX.Element {
   return <Box borderStyle="round" borderColor="cyan" paddingX={1}>
-    <Text bold color="cyan">gfotos-migrator {VERSION}</Text>
+    <Text bold color="cyan">{PACKAGE_NAME} {VERSION}</Text>
   </Box>;
 }
 
