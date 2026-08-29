@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.0.0...gfotos-migrator-v1.1.0) (2026-08-29)
+
+
+### Features
+
+* add guided self-update ([bcabb03](https://github.com/daordonez/gfotos-exporter/commit/bcabb03073cae02c0188bcccff9cb7fe1510b32f))
+* add public TUI self-updates ([f6acd90](https://github.com/daordonez/gfotos-exporter/commit/f6acd90192fe12cfd6c94dfd5b564901ba58795c))
+* support public release distribution ([f53a7b1](https://github.com/daordonez/gfotos-exporter/commit/f53a7b1fe92be3685455cf81fd1165b4dd3709a6))
+
 ## 1.0.0 (2026-08-29)
 
 
