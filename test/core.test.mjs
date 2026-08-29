@@ -9,6 +9,7 @@ import {MigrationDatabase} from '../dist/database.js';
 import {requiredBytes} from '../dist/migration.js';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout} from '../dist/takeout.js';
+import {volumeMountPath} from '../dist/volume.js';
 
 const execute = promisify(execFile);
 
@@ -20,6 +21,12 @@ test('rejects unsafe archive paths', () => {
 
 test('adds migration storage headroom', () => {
   assert.equal(requiredBytes({archives: 1, images: 1, videos: 0, compressedBytes: 10, extractBytes: 100, rejectedEntries: 0}), 120);
+});
+
+test('creates safe APFS volume mount paths', () => {
+  assert.equal(volumeMountPath('Google Migration'), '/Volumes/Google Migration');
+  assert.throws(() => volumeMountPath('../unsafe'));
+  assert.throws(() => volumeMountPath(''));
 });
 
 test('persists migration state by media hash', async () => {
