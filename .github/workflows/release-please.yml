@@ -27,16 +27,18 @@ jobs:
         with:
           ref: ${{ steps.release.outputs.tag_name }}
 
+      - name: Set up pnpm
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
       - name: Set up Node.js
         if: ${{ steps.release.outputs.release_created == 'true' }}
         uses: actions/setup-node@v5
         with:
           node-version: 22.13.0
-          package-manager-cache: false
-
-      - name: Enable Corepack
-        if: ${{ steps.release.outputs.release_created == 'true' }}
-        run: corepack enable
+          cache: pnpm
 
       - name: Install dependencies
         if: ${{ steps.release.outputs.release_created == 'true' }}
