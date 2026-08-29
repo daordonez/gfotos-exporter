@@ -33,8 +33,17 @@ read_github_token() {
   fi
 
   printf 'GitHub token: ' >&2
-  IFS= read -r -s GITHUB_TOKEN
+  if ! IFS= read -r -s GITHUB_TOKEN; then
+    printf '\n' >&2
+    fail "No GitHub token was provided. Installation cancelled."
+  fi
   printf '\n' >&2
+
+  if [ -z "$GITHUB_TOKEN" ]; then
+    fail "No GitHub token was provided. Installation cancelled."
+  fi
+
+  printf '*****\n' >&2
 }
 
 parse_arguments() {
@@ -51,7 +60,7 @@ parse_arguments() {
       ;;
   esac
 
-  [ -n "$GITHUB_TOKEN" ] || fail "The GitHub token cannot be empty."
+  [ -n "$GITHUB_TOKEN" ] || fail "No GitHub token was provided. Installation cancelled."
 }
 
 require_supported_platform() {
