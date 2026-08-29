@@ -240,7 +240,7 @@ function App(): React.JSX.Element {
       <Text color="red">All data on the selected disk will be permanently erased.</Text>
       {externalDisks.length > 0 ? <Select visibleOptionCount={10} options={[
         ...externalDisks.map(disk => ({label: `${disk.deviceIdentifier} — ${disk.name} — ${formatBytes(disk.capacityBytes)}`, value: disk.deviceIdentifier})),
-        {label: 'Back to volume selection', value: 'back'},
+        {label: 'Back', value: 'back'},
         {label: 'Cancel migration', value: 'cancel'}
       ]} onChange={value => {
         if (value === 'back') void loadExternalVolumesAfterInventory();
@@ -259,7 +259,7 @@ function App(): React.JSX.Element {
         <StatusMessage variant="warning">No eligible external physical disks were found.</StatusMessage>
         <Text>Connect an external disk and try again.</Text>
         <Select options={[
-          {label: 'Back to volume selection', value: 'back'},
+          {label: 'Back', value: 'back'},
           {label: 'Cancel migration', value: 'cancel'}
         ]} onChange={value => {
           if (value === 'back') void loadExternalVolumesAfterInventory();
