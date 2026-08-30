@@ -31,3 +31,36 @@ Run `status` and `report`. Imported items are skipped on a subsequent import bec
 ## Update check or installation fails
 
 The update check is optional and does not affect migration. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset, then launch guided migration again.
+
+## Installer reports a version mismatch after upgrade
+
+The installer verifies both the installed package manifest and the active executable after every installation. A mismatch means a stale binary is shadowing the newly installed one.
+
+**Remediation steps:**
+
+1. Identify the stale executable and the one installed by the installer:
+
+   ```sh
+   which -a gfotos-migrator
+   gfotos-migrator --version
+   ```
+
+2. Remove the legacy global installation from the user prefix:
+
+   ```sh
+   npm uninstall --global gfotos-migrator --prefix ~/.local
+   ```
+
+3. If a stale binary still appears earlier on `PATH` (for example in `/usr/local/bin` or a Homebrew prefix), remove or rename it:
+
+   ```sh
+   rm "$(which gfotos-migrator)"
+   ```
+
+4. Open a new terminal to reload `PATH`, then verify the correct version is active:
+
+   ```sh
+   gfotos-migrator --version
+   ```
+
+5. If the correct version is not active, rerun the installer.

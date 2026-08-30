@@ -327,17 +327,50 @@ download_release() {
 }
 
 install_package() {
-  local temporary_directory package_path
+  local temporary_directory package_path expected_version installed_version active_exe manifest_version
   temporary_directory="$(mktemp -d)"
   package_path="${temporary_directory}/${SELECTED_PACKAGE_NAME}"
   trap 'rm -rf "$temporary_directory"' EXIT
+
+  # Derive the expected semver from the selected release tag (strip leading "v").
+  expected_version="${SELECTED_RELEASE_TAG#v}"
 
   download_release "$package_path"
   npm config set prefix "$USER_PREFIX"
   export PATH="${USER_PREFIX}/bin:${PATH}"
   persist_path "${USER_PREFIX}/bin"
+
+  # Remove any previous installation so a stale binary cannot shadow the new one.
+  if npm list --global --depth=0 gfotos-migrator >/dev/null 2>&1; then
+    npm uninstall --global gfotos-migrator
+  fi
+
   npm install --global "$package_path"
-  command -v gfotos-migrator >/dev/null 2>&1 || fail "Installation completed but gfotos-migrator is not on PATH."
+
+  active_exe="$(command -v gfotos-migrator 2>/dev/null || true)"
+  [ -n "$active_exe" ] || fail "Installation completed but gfotos-migrator is not on PATH."
+
+  # Verify the installed package.json version matches the selected release.
+  manifest_version="$(node --input-type=module --eval '
+    import { readFileSync } from "node:fs";
+    const [prefix] = process.argv.slice(1);
+    const manifest = JSON.parse(readFileSync(`${prefix}/lib/node_modules/gfotos-migrator/package.json`, "utf8"));
+    process.stdout.write(manifest.version);
+  ' "$USER_PREFIX" 2>/dev/null || true)"
+
+  if [ "$manifest_version" != "$expected_version" ]; then
+    fail "Version mismatch: expected ${expected_version} in ${USER_PREFIX}/lib/node_modules/gfotos-migrator/package.json but found '${manifest_version}'. Remove stale installations with: npm uninstall --global gfotos-migrator --prefix ${USER_PREFIX}"
+  fi
+
+  # Verify the active executable reports the expected version.
+  installed_version="$("$active_exe" --version 2>/dev/null | tr -d '[:space:]' || true)"
+
+  if [ "$installed_version" != "$expected_version" ]; then
+    fail "Version mismatch: expected ${expected_version} but '${active_exe} --version' returned '${installed_version}'. A stale or shadowing executable may be earlier on PATH. Remove it or adjust PATH order, then rerun the installer."
+  fi
+
+  log "Installed version : ${installed_version}"
+  log "Executable path   : ${active_exe}"
 }
 
 main() {

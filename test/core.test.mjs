@@ -117,3 +117,148 @@ test('exports version from package.json', async () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+$/);
 });
 
+
+// Installer version-verification tests.
+// These tests exercise the shell logic that checks whether the installed
+// package manifest and active executable match the selected release version.
+
+const installerRoot = path.resolve(fileURLToPath(import.meta.url), '../../');
+
+/**
+ * Build a self-contained bash snippet that reproduces the installer's
+ * post-install version verification for a given scenario.
+ *
+ * @param {object} opts
+ * @param {string} opts.expectedVersion   - The release version selected by the installer.
+ * @param {string} opts.manifestVersion   - The version stored in the fake package.json.
+ * @param {string} opts.executableVersion - The version output by the fake executable.
+ * @param {string} opts.prefixDir         - Path to the fake USER_PREFIX directory.
+ * @param {string} opts.binDir            - Path to the fake bin directory.
+ */
+function buildVerifySnippet({expectedVersion, manifestVersion, executableVersion, prefixDir, binDir}) {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf '%s\\n' "[gfotos-migrator] ERROR: $*" >&2
+  exit 1
+}
+
+expected_version="${expectedVersion}"
+active_exe="${binDir}/gfotos-migrator"
+USER_PREFIX="${prefixDir}"
+
+[ -n "$active_exe" ] || fail "Installation completed but gfotos-migrator is not on PATH."
+
+manifest_version="$(node --input-type=module --eval '
+  import { readFileSync } from "node:fs";
+  const [prefix] = process.argv.slice(1);
+  const manifest = JSON.parse(readFileSync(\`\${prefix}/lib/node_modules/gfotos-migrator/package.json\`, "utf8"));
+  process.stdout.write(manifest.version);
+' "$USER_PREFIX" 2>/dev/null || true)"
+
+if [ "$manifest_version" != "$expected_version" ]; then
+  fail "Version mismatch: expected \${expected_version} in \${USER_PREFIX}/lib/node_modules/gfotos-migrator/package.json but found '\${manifest_version}'. Remove stale installations with: npm uninstall --global gfotos-migrator --prefix \${USER_PREFIX}"
+fi
+
+installed_version="$("$active_exe" --version 2>/dev/null | tr -d '[:space:]' || true)"
+
+if [ "$installed_version" != "$expected_version" ]; then
+  fail "Version mismatch: expected \${expected_version} but '\${active_exe} --version' returned '\${installed_version}'. A stale or shadowing executable may be earlier on PATH. Remove it or adjust PATH order, then rerun the installer."
+fi
+
+printf '%s\\n' "OK: \${expected_version} \${active_exe}"
+`;
+}
+
+async function makeInstallerEnv(tmpDir, {manifestVersion, executableVersion}) {
+  const moduleDir = path.join(tmpDir, 'lib', 'node_modules', 'gfotos-migrator');
+  const binDir = path.join(tmpDir, 'bin');
+  const {mkdir, chmod} = await import('node:fs/promises');
+  await mkdir(moduleDir, {recursive: true});
+  await mkdir(binDir, {recursive: true});
+  await writeFile(path.join(moduleDir, 'package.json'), JSON.stringify({name: 'gfotos-migrator', version: manifestVersion}));
+  const fakeExe = path.join(binDir, 'gfotos-migrator');
+  await writeFile(fakeExe, `#!/usr/bin/env bash\necho '${executableVersion}'\n`);
+  await chmod(fakeExe, 0o755);
+  return {moduleDir, binDir};
+}
+
+test('installer version verification passes when manifest and executable match the selected release', async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-installer-ok-'));
+  try {
+    const {binDir} = await makeInstallerEnv(tmpDir, {manifestVersion: '1.2.0', executableVersion: '1.2.0'});
+    const snippet = buildVerifySnippet({
+      expectedVersion: '1.2.0',
+      manifestVersion: '1.2.0',
+      executableVersion: '1.2.0',
+      prefixDir: tmpDir,
+      binDir,
+    });
+    const snippetPath = path.join(tmpDir, 'verify.sh');
+    await writeFile(snippetPath, snippet, {mode: 0o755});
+    const {stdout} = await new Promise((resolve, reject) => {
+      execFile('/usr/bin/env', ['bash', snippetPath], {encoding: 'utf8'}, (err, stdout, stderr) => {
+        if (err) reject(new Error(`Script failed: ${stderr || err.message}`)); else resolve({stdout, stderr});
+      });
+    });
+    assert.match(stdout, /OK: 1\.2\.0/);
+  } finally {
+    await rm(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('installer version verification detects a stale 0.0.0 manifest after upgrade attempt', async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-installer-stale-'));
+  try {
+    // Simulate the legacy package still installed in the prefix (version 0.0.0)
+    // after an attempted upgrade to 1.2.0.
+    const {binDir} = await makeInstallerEnv(tmpDir, {manifestVersion: '0.0.0', executableVersion: '0.0.0'});
+    const snippet = buildVerifySnippet({
+      expectedVersion: '1.2.0',
+      manifestVersion: '0.0.0',
+      executableVersion: '0.0.0',
+      prefixDir: tmpDir,
+      binDir,
+    });
+    const snippetPath = path.join(tmpDir, 'verify.sh');
+    await writeFile(snippetPath, snippet, {mode: 0o755});
+    const {code, stderr} = await new Promise((resolve) => {
+      execFile('/usr/bin/env', ['bash', snippetPath], {encoding: 'utf8'}, (err, stdout, stderr) => {
+        resolve({code: err?.code ?? 0, stderr});
+      });
+    });
+    assert.notEqual(code, 0, 'Expected non-zero exit code for version mismatch');
+    assert.match(stderr, /Version mismatch/);
+    assert.match(stderr, /npm uninstall --global gfotos-migrator/);
+  } finally {
+    await rm(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('installer version verification detects a shadowing executable with wrong version', async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-installer-shadow-'));
+  try {
+    // Manifest is correct but the active executable on PATH reports the old version.
+    const {binDir} = await makeInstallerEnv(tmpDir, {manifestVersion: '1.2.0', executableVersion: '0.0.0'});
+    const snippet = buildVerifySnippet({
+      expectedVersion: '1.2.0',
+      manifestVersion: '1.2.0',
+      executableVersion: '0.0.0',
+      prefixDir: tmpDir,
+      binDir,
+    });
+    const snippetPath = path.join(tmpDir, 'verify.sh');
+    await writeFile(snippetPath, snippet, {mode: 0o755});
+    const {code, stderr} = await new Promise((resolve) => {
+      execFile('/usr/bin/env', ['bash', snippetPath], {encoding: 'utf8'}, (err, stdout, stderr) => {
+        resolve({code: err?.code ?? 0, stderr});
+      });
+    });
+    assert.notEqual(code, 0, 'Expected non-zero exit code for shadowing executable');
+    assert.match(stderr, /Version mismatch/);
+    assert.match(stderr, /stale or shadowing executable/);
+  } finally {
+    await rm(tmpDir, {recursive: true, force: true});
+  }
+});
