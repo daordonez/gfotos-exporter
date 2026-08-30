@@ -25,9 +25,36 @@ Guided migration checks ExifTool and offers to install it through Homebrew when 
 
 ## Updates
 
-Each guided migration launch checks GitHub Releases for a newer stable package before showing the main menu. The check has a short timeout and failures do not block migration. When an update is available, the operator can accept it to download the exact matching release package and install it with `npm` globally, then restart the command. Rejecting the prompt makes no change.
+Each guided migration launch checks GitHub Releases for a newer stable package before showing the main menu. The check has a short timeout and failures do not block migration. When an update is available, the operator can accept it to download the exact matching release package and install it with `npm` globally using the prefix that owns the resolved executable, then restart the command. Rejecting the prompt makes no change.
 
 Published releases are public. The update check and package download do not require a GitHub account, GitHub CLI, or a token.
+
+After installation the update is verified: the newly installed package manifest is read to confirm the version, and the active executable is run with `--version` to confirm that no stale binary is shadowing the new one. If either check fails, the installation is reported as failed and migration continues without updating.
+
+## Upgrade compatibility matrix
+
+| Installed version | In-app updater | Supported upgrade route |
+| --- | --- | --- |
+| `0.0.0` | No — predates the updater | Re-run `./install-gfotos-migrator.sh` |
+| `0.1.x` | Yes | Offered automatically at guided-migration launch |
+| `1.x` (current) | Yes — with prefix detection and post-install verification | Offered automatically at guided-migration launch |
+
+To verify the active installation:
+
+```sh
+which -a gfotos-migrator
+gfotos-migrator --version
+```
+
+### Repair a stale or legacy installation
+
+If `gfotos-migrator --version` reports `0.0.0` or any version that predates the current release, rerun the installer:
+
+```sh
+./install-gfotos-migrator.sh
+```
+
+The installer selects the latest published release, removes any previous installation from the managed prefix (`~/.local`), installs the new package, and verifies both the package manifest and the active executable before completing.
 
 ## Recovery
 

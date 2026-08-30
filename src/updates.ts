@@ -1,4 +1,4 @@
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {run} from './system.js';
@@ -86,7 +86,54 @@ export async function checkForUpdate(currentVersion: string): Promise<AvailableU
   return findAvailableUpdate(await fetchReleases(), currentVersion);
 }
 
+export function resolveExecutablePrefix(executablePath: string): string {
+  const normalized = path.resolve(executablePath);
+  const binDirectory = path.dirname(normalized);
+  if (path.basename(binDirectory) !== 'bin') {
+    throw new Error(`Cannot determine npm prefix: expected executable in a 'bin' directory but found: ${binDirectory}`);
+  }
+  return path.dirname(binDirectory);
+}
+
+async function findActiveExecutable(): Promise<string> {
+  try {
+    const {stdout} = await run('which', ['gfotos-migrator']);
+    const exe = stdout.trim();
+    if (!exe) throw new Error('empty');
+    return exe;
+  } catch {
+    throw new Error('Cannot locate the active gfotos-migrator executable on PATH.');
+  }
+}
+
+export async function verifyInstalledVersion(prefix: string, expectedVersion: string, executablePath: string): Promise<void> {
+  const manifestPath = path.join(prefix, 'lib', 'node_modules', 'gfotos-migrator', 'package.json');
+  let manifestVersion: string;
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {version: string};
+    manifestVersion = manifest.version;
+  } catch {
+    throw new Error(`Cannot read installed package manifest at ${manifestPath}.`);
+  }
+  if (manifestVersion !== expectedVersion) {
+    throw new Error(`Version mismatch after update: expected ${expectedVersion} but package manifest at ${manifestPath} reports '${manifestVersion}'.`);
+  }
+  let activeVersion: string;
+  try {
+    const {stdout} = await run(executablePath, ['--version']);
+    activeVersion = stdout.trim();
+  } catch {
+    throw new Error(`Cannot run the updated executable at ${executablePath}.`);
+  }
+  if (activeVersion !== expectedVersion) {
+    throw new Error(`Version mismatch after update: expected ${expectedVersion} but '${executablePath} --version' reports '${activeVersion}'. A stale executable may be shadowing the new installation. Repair with: npm uninstall --prefix ${prefix} -g gfotos-migrator`);
+  }
+}
+
 export async function installUpdate(update: AvailableUpdate): Promise<void> {
+  const activeExe = await findActiveExecutable();
+  const prefix = resolveExecutablePrefix(activeExe);
+
   const response = await fetch(`${ASSETS_URL}/${update.assetId}`, {
     headers: requestHeaders('application/octet-stream'),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
@@ -97,7 +144,13 @@ export async function installUpdate(update: AvailableUpdate): Promise<void> {
   const packagePath = path.join(directory, update.packageName);
   try {
     await writeFile(packagePath, Buffer.from(await response.arrayBuffer()), {mode: 0o600});
-    await run('npm', ['install', '--global', packagePath]);
+    try {
+      await run('npm', ['uninstall', '--global', 'gfotos-migrator', '--prefix', prefix]);
+    } catch {
+      // Not installed in this prefix; proceed to install.
+    }
+    await run('npm', ['install', '--global', '--prefix', prefix, packagePath]);
+    await verifyInstalledVersion(prefix, update.version, activeExe);
   } finally {
     await rm(directory, {recursive: true, force: true});
   }

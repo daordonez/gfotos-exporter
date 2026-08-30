@@ -31,7 +31,15 @@ Start the guided workflow:
 gfotos-migrator guided-migration
 ```
 
-When guided migration starts, the tool checks published GitHub Releases and offers to install a newer stable version. Rejecting the prompt continues migration without changes. No GitHub account or token is required.
+When guided migration starts, the tool checks published GitHub Releases and offers to install a newer stable version. The update installs into the same npm prefix that owns the resolved executable and verifies the installed version before prompting a restart. Rejecting the prompt continues migration without changes. No GitHub account or token is required.
+
+To upgrade from version `0.0.0` or any release that predates the in-app updater, rerun the installer:
+
+```sh
+./install-gfotos-migrator.sh
+```
+
+See the [upgrade compatibility matrix](docs/operations.md#upgrade-compatibility-matrix) for the full version table and repair steps.
 
 The target library is `GoogleTakeoutMigration.photoslibrary`. It must remain outside iCloud Photos and cannot be the System Photo Library. Takeout ZIP archives are treated as read-only input.
 

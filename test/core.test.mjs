@@ -11,7 +11,7 @@ import {MigrationDatabase} from '../dist/database.js';
 import {requiredBytes} from '../dist/migration.js';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout} from '../dist/takeout.js';
-import {findAvailableUpdate} from '../dist/updates.js';
+import {findAvailableUpdate, resolveExecutablePrefix, verifyInstalledVersion} from '../dist/updates.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 
 const execute = promisify(execFile);
@@ -115,6 +115,82 @@ test('exports version from package.json', async () => {
   assert.equal(VERSION, packageInfo.version);
   assert.equal(PACKAGE_NAME, packageInfo.name);
   assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+});
+
+// Upgrade path regression tests
+
+test('resolves npm prefix from a standard global executable path', () => {
+  assert.equal(resolveExecutablePrefix('/home/user/.local/bin/gfotos-migrator'), '/home/user/.local');
+  assert.equal(resolveExecutablePrefix('/usr/local/bin/gfotos-migrator'), '/usr/local');
+  assert.equal(resolveExecutablePrefix('/opt/homebrew/bin/gfotos-migrator'), '/opt/homebrew');
+});
+
+test('throws when executable is not inside a bin directory', () => {
+  assert.throws(() => resolveExecutablePrefix('/home/user/.local/gfotos-migrator'), /expected executable in a 'bin' directory/);
+  assert.throws(() => resolveExecutablePrefix('/home/user/.local/sbin/gfotos-migrator'), /expected executable in a 'bin' directory/);
+});
+
+test('legacy 0.0.0 is offered an update to any newer stable release', () => {
+  const releases = [
+    {tag_name: 'v1.3.0', draft: false, prerelease: false, assets: [{id: 100, name: 'gfotos-migrator-1.3.0.tgz'}]},
+    {tag_name: 'v0.1.0', draft: false, prerelease: false, assets: [{id: 10, name: 'gfotos-migrator-0.1.0.tgz'}]}
+  ];
+  const update = findAvailableUpdate(releases, '0.0.0');
+  assert.deepEqual(update, {version: '1.3.0', assetId: 100, packageName: 'gfotos-migrator-1.3.0.tgz'});
+});
+
+test('declined update: returns undefined when already on latest stable release', () => {
+  const releases = [
+    {tag_name: 'v1.3.0', draft: false, prerelease: false, assets: [{id: 100, name: 'gfotos-migrator-1.3.0.tgz'}]}
+  ];
+  assert.equal(findAvailableUpdate(releases, '1.3.0'), undefined);
+});
+
+test('shadowed-path scenario: malformed current version does not produce an update', () => {
+  const releases = [
+    {tag_name: 'v1.3.0', draft: false, prerelease: false, assets: [{id: 100, name: 'gfotos-migrator-1.3.0.tgz'}]}
+  ];
+  // A shadowed/corrupt install might report no version or an invalid string.
+  assert.equal(findAvailableUpdate(releases, ''), undefined);
+  assert.equal(findAvailableUpdate(releases, 'unknown'), undefined);
+});
+
+test('failed-update scenario: release with no matching package asset is skipped', () => {
+  const releases = [
+    {tag_name: 'v1.4.0', draft: false, prerelease: false, assets: []},
+    {tag_name: 'v1.3.1', draft: false, prerelease: false, assets: [{id: 200, name: 'gfotos-migrator-1.3.1.tgz'}]}
+  ];
+  const update = findAvailableUpdate(releases, '1.3.0');
+  // v1.4.0 has no asset so the next best available (1.3.1) is returned.
+  assert.deepEqual(update, {version: '1.3.1', assetId: 200, packageName: 'gfotos-migrator-1.3.1.tgz'});
+});
+
+test('verifyInstalledVersion detects a manifest version mismatch', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-migrator-test-'));
+  const fakeModuleDir = path.join(directory, 'lib', 'node_modules', 'gfotos-migrator');
+  try {
+    await execute('/bin/mkdir', ['-p', fakeModuleDir]);
+    await writeFile(path.join(fakeModuleDir, 'package.json'), JSON.stringify({version: '1.2.0'}));
+    // Executable check will fail too since it's the wrong version; we only care about the manifest error here.
+    await assert.rejects(
+      verifyInstalledVersion(directory, '1.3.0', '/usr/bin/true'),
+      /manifest.*1\.2\.0|1\.2\.0.*manifest/
+    );
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('verifyInstalledVersion detects a missing package manifest', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-migrator-test-'));
+  try {
+    await assert.rejects(
+      verifyInstalledVersion(directory, '1.3.0', '/usr/bin/true'),
+      /Cannot read installed package manifest/
+    );
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
 });
 
 
