@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.2.0...gfotos-migrator-v1.2.1) (2026-08-30)
+
+
+### Bug Fixes
+
+* defer node:sqlite import to suppress startup ExperimentalWarning ([fbd2678](https://github.com/daordonez/gfotos-exporter/commit/fbd26781eb31fbe5f3f64985aabe298dd9772d98))
+
 ## [1.2.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.1.0...gfotos-migrator-v1.2.0) (2026-08-29)
 
 
