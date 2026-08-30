@@ -8,7 +8,7 @@ import {importCandidates, initializePaths, requiredBytes, type ImportProgress} f
 import {openPhotosLibrary} from './photos.js';
 import {inventoryTakeout} from './takeout.js';
 import {checkForUpdate, installUpdate, type AvailableUpdate} from './updates.js';
-import {VERSION} from './version.js';
+import {VERSION, PACKAGE_NAME} from './version.js';
 import {eraseExternalDisk, externalWholeDiskForVolume, listExternalWholeDisks, listSelectableExternalVolumes, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
 import type {MediaCandidate, TakeoutInventory} from './domain.js';
 
@@ -21,6 +21,12 @@ function formatBytes(bytes: number): string {
   let index = -1;
   do { value /= 1024; index++; } while (value >= 1024 && index < units.length - 1);
   return `${value.toFixed(1)} ${units[index]}`;
+}
+
+function Banner(): React.JSX.Element {
+  return <Box borderStyle="round" borderColor="cyan" paddingX={1}>
+    <Text bold color="cyan">{PACKAGE_NAME} {VERSION}</Text>
+  </Box>;
 }
 
 function App(): React.JSX.Element {
@@ -180,7 +186,7 @@ function App(): React.JSX.Element {
   }, [screen, volumePath]);
 
   return <Box flexDirection="column" padding={1} gap={1}>
-    <Text color="cyan" bold>gfotos-migrator</Text>
+    <Banner/>
     {error && <Alert variant="error">{error}</Alert>}
     {screen === 'checking-update' && <Spinner label="Checking for updates..."/>}
     {screen === 'update-available' && availableUpdate && <><StatusMessage variant="info">{`Version ${availableUpdate.version} is available.`}</StatusMessage><Text>{`Update from ${VERSION} now?`}</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void applyUpdate()} onCancel={() => setScreen('menu')}/></>}

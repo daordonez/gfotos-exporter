@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
+import {createRequire} from 'node:module';
 import {promisify} from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import {findAvailableUpdate} from '../dist/updates.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 
 const execute = promisify(execFile);
+const require = createRequire(import.meta.url);
 
 test('rejects unsafe archive paths', () => {
   assert.equal(isSafeArchivePath('../escape.jpg'), false);
@@ -106,3 +108,12 @@ test('does not suggest draft, prerelease, malformed, or older releases', () => {
   ], '0.1.0');
   assert.equal(update, undefined);
 });
+
+test('exports version from package.json', async () => {
+  const {VERSION, PACKAGE_NAME} = await import('../dist/version.js');
+  const packageInfo = require('../package.json');
+  assert.equal(VERSION, packageInfo.version);
+  assert.equal(PACKAGE_NAME, packageInfo.name);
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+});
+
