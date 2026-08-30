@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.2.1...gfotos-migrator-v1.3.0) (2026-08-30)
+
+
+### Features
+
+* verify active CLI version after installer upgrades ([42c7a03](https://github.com/daordonez/gfotos-exporter/commit/42c7a033c6e7549ea13fe4cd5cd103aa8ae97c63))
+
 ## [1.2.1](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.2.0...gfotos-migrator-v1.2.1) (2026-08-30)
 
 
