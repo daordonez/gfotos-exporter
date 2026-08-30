@@ -1,5 +1,29 @@
 # Troubleshooting
 
+## Active command reports version 0.0.0 or is otherwise outdated
+
+Version `0.0.0` predates the in-app updater and cannot offer an upgrade automatically. Rerun the installer to replace it with the latest stable release:
+
+```sh
+./install-gfotos-migrator.sh
+```
+
+If the installer is not available locally, clone the repository first:
+
+```sh
+git clone https://github.com/daordonez/gfotos-exporter.git
+cd gfotos-exporter
+chmod +x install-gfotos-migrator.sh
+./install-gfotos-migrator.sh
+```
+
+After installation, open a new terminal and verify:
+
+```sh
+which -a gfotos-migrator
+gfotos-migrator --version
+```
+
 ## ExifTool is missing
 
 Install it with `brew install exiftool`, then rerun `gfotos-migrator doctor`.
