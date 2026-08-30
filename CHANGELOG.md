@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.3.0...gfotos-migrator-v1.4.0) (2026-08-30)
+
+
+### Features
+
+* durable upgrade path for all deployed TUI versions ([1df6c9b](https://github.com/daordonez/gfotos-exporter/commit/1df6c9bb5be75ce2c1c640aa562c55edf85c282a))
+* durable upgrade path for all deployed TUI versions ([cb2bfdf](https://github.com/daordonez/gfotos-exporter/commit/cb2bfdff84b2dcf99685079e7a175448ef52101b))
+
+
+### Bug Fixes
+
+* handle component-scoped tags (gfotos-migrator-vX.Y.Z) in updater and installer ([2fa7491](https://github.com/daordonez/gfotos-exporter/commit/2fa7491f93e5f416f6f6b34dc5ff8b46cc294bcc))
+
 ## [1.3.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.2.1...gfotos-migrator-v1.3.0) (2026-08-30)
 
 
