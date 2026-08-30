@@ -38,29 +38,31 @@ The installer verifies both the installed package manifest and the active execut
 
 **Remediation steps:**
 
-1. Identify the stale executable and the one installed by the installer:
+1. The installer error message includes the actual prefix path used during installation (for example `~/.local`). Use that path in the commands below instead of `<prefix>`.
+
+2. Identify the stale executable and the one installed by the installer:
 
    ```sh
    which -a gfotos-migrator
    gfotos-migrator --version
    ```
 
-2. Remove the legacy global installation from the user prefix:
+3. Remove the legacy global installation from the user prefix reported in the error message:
 
    ```sh
-   npm uninstall --global gfotos-migrator --prefix ~/.local
+   npm uninstall --global gfotos-migrator --prefix <prefix>
    ```
 
-3. If a stale binary still appears earlier on `PATH` (for example in `/usr/local/bin` or a Homebrew prefix), remove or rename it:
+4. If a stale binary still appears earlier on `PATH` (for example in `/usr/local/bin` or a Homebrew prefix), remove or rename it:
 
    ```sh
    rm "$(which gfotos-migrator)"
    ```
 
-4. Open a new terminal to reload `PATH`, then verify the correct version is active:
+5. Open a new terminal to reload `PATH`, then verify the correct version is active:
 
    ```sh
    gfotos-migrator --version
    ```
 
-5. If the correct version is not active, rerun the installer.
+6. If the correct version is not active, rerun the installer.
