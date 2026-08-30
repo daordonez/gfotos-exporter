@@ -297,7 +297,10 @@ select_release() {
   [ "$selected_option" -ge 1 ] && [ "$selected_option" -le "$release_count" ] || fail "The release selection must be a number between 1 and ${release_count}."
 
   SELECTED_RELEASE_TAG="${release_tags[$selected_option]}"
-  SELECTED_PACKAGE_NAME="gfotos-migrator-${SELECTED_RELEASE_TAG#v}.tgz"
+  # Strip an optional "gfotos-migrator-" prefix, then the leading "v", to get the bare semver.
+  local tag_semver="${SELECTED_RELEASE_TAG#gfotos-migrator-}"
+  tag_semver="${tag_semver#v}"
+  SELECTED_PACKAGE_NAME="gfotos-migrator-${tag_semver}.tgz"
   log "Selected release: ${SELECTED_RELEASE_TAG}."
 }
 
@@ -332,8 +335,9 @@ install_package() {
   package_path="${temporary_directory}/${SELECTED_PACKAGE_NAME}"
   trap 'rm -rf "$temporary_directory"' EXIT
 
-  # Derive the expected semver from the selected release tag (strip leading "v").
-  expected_version="${SELECTED_RELEASE_TAG#v}"
+  # Derive the expected semver from the selected release tag (strip optional component prefix and leading "v").
+  expected_version="${SELECTED_RELEASE_TAG#gfotos-migrator-}"
+  expected_version="${expected_version#v}"
 
   download_release "$package_path"
   npm config set prefix "$USER_PREFIX"
