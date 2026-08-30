@@ -155,6 +155,30 @@ test('shadowed-path scenario: malformed current version does not produce an upda
   assert.equal(findAvailableUpdate(releases, 'unknown'), undefined);
 });
 
+test('findAvailableUpdate handles component-scoped tag gfotos-migrator-v1.3.0', () => {
+  const releases = [
+    {tag_name: 'gfotos-migrator-v1.3.0', draft: false, prerelease: false, assets: [{id: 100, name: 'gfotos-migrator-1.3.0.tgz'}]}
+  ];
+  const update = findAvailableUpdate(releases, '0.1.0');
+  assert.deepEqual(update, {version: '1.3.0', assetId: 100, packageName: 'gfotos-migrator-1.3.0.tgz'});
+});
+
+test('findAvailableUpdate ignores component-scoped tag when already at that version', () => {
+  const releases = [
+    {tag_name: 'gfotos-migrator-v1.3.0', draft: false, prerelease: false, assets: [{id: 100, name: 'gfotos-migrator-1.3.0.tgz'}]}
+  ];
+  assert.equal(findAvailableUpdate(releases, '1.3.0'), undefined);
+});
+
+test('findAvailableUpdate selects component-scoped tag over an older plain tag', () => {
+  const releases = [
+    {tag_name: 'gfotos-migrator-v1.3.0', draft: false, prerelease: false, assets: [{id: 100, name: 'gfotos-migrator-1.3.0.tgz'}]},
+    {tag_name: 'v0.2.0', draft: false, prerelease: false, assets: [{id: 20, name: 'gfotos-migrator-0.2.0.tgz'}]}
+  ];
+  const update = findAvailableUpdate(releases, '0.1.0');
+  assert.deepEqual(update, {version: '1.3.0', assetId: 100, packageName: 'gfotos-migrator-1.3.0.tgz'});
+});
+
 test('failed-update scenario: release with no matching package asset is skipped', () => {
   const releases = [
     {tag_name: 'v1.4.0', draft: false, prerelease: false, assets: []},
@@ -334,6 +358,50 @@ test('installer version verification detects a shadowing executable with wrong v
     assert.notEqual(code, 0, 'Expected non-zero exit code for shadowing executable');
     assert.match(stderr, /Version mismatch/);
     assert.match(stderr, /stale or shadowing executable/);
+  } finally {
+    await rm(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('installer derives correct package name from component-scoped tag gfotos-migrator-v1.3.0', async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-installer-scoped-'));
+  try {
+    const snippetPath = path.join(tmpDir, 'derive.sh');
+    await writeFile(snippetPath, `#!/usr/bin/env bash
+set -euo pipefail
+tag="gfotos-migrator-v1.3.0"
+semver="\${tag#gfotos-migrator-}"
+semver="\${semver#v}"
+printf '%s\\n' "gfotos-migrator-\${semver}.tgz"
+`, {mode: 0o755});
+    const {stdout} = await new Promise((resolve, reject) => {
+      execFile('/usr/bin/env', ['bash', snippetPath], {encoding: 'utf8'}, (err, stdout, stderr) => {
+        if (err) reject(new Error(`Script failed: ${stderr || err.message}`)); else resolve({stdout, stderr});
+      });
+    });
+    assert.equal(stdout.trim(), 'gfotos-migrator-1.3.0.tgz');
+  } finally {
+    await rm(tmpDir, {recursive: true, force: true});
+  }
+});
+
+test('installer derives correct package name from plain v-prefixed tag v1.3.0', async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-installer-plain-'));
+  try {
+    const snippetPath = path.join(tmpDir, 'derive.sh');
+    await writeFile(snippetPath, `#!/usr/bin/env bash
+set -euo pipefail
+tag="v1.3.0"
+semver="\${tag#gfotos-migrator-}"
+semver="\${semver#v}"
+printf '%s\\n' "gfotos-migrator-\${semver}.tgz"
+`, {mode: 0o755});
+    const {stdout} = await new Promise((resolve, reject) => {
+      execFile('/usr/bin/env', ['bash', snippetPath], {encoding: 'utf8'}, (err, stdout, stderr) => {
+        if (err) reject(new Error(`Script failed: ${stderr || err.message}`)); else resolve({stdout, stderr});
+      });
+    });
+    assert.equal(stdout.trim(), 'gfotos-migrator-1.3.0.tgz');
   } finally {
     await rm(tmpDir, {recursive: true, force: true});
   }

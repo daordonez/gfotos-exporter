@@ -34,7 +34,7 @@ interface SemanticVersion {
 }
 
 function parseVersion(value: string): SemanticVersion | undefined {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  const match = /^(?:gfotos-migrator-)?v?(\d+)\.(\d+)\.(\d+)$/.exec(value);
   if (!match) return undefined;
   return {major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3])};
 }
