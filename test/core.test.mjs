@@ -36,7 +36,8 @@ test('creates safe APFS volume mount paths', () => {
 test('accepts external mounted volumes regardless of their filesystem but excludes critical destinations', () => {
   const selectable = {mountPoint: '/Volumes/Migration', filesystem: 'exfat', availableBytes: 100, capacityBytes: 200, isExternal: true, isReadOnly: false};
   assert.equal(isSelectableExternalVolume(selectable), true);
-  assert.equal(isSelectableExternalVolume({...selectable, isExternal: false}), false);
+  // isExternal reflects RemovableMediaOrExternalDevice; SD cards via integrated readers have isExternal: true even when Internal=true
+  assert.equal(isSelectableExternalVolume({...selectable, isExternal: false}), false, 'non-removable internal disk must be rejected');
   assert.equal(isSelectableExternalVolume({...selectable, isReadOnly: true}), false);
   assert.equal(isSelectableExternalVolume({...selectable, mountPoint: '/System/Volumes/Data'}), false);
   assert.equal(isSelectableExternalVolume(selectable, ['/Volumes/Migration']), false);

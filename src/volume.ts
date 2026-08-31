@@ -87,7 +87,7 @@ export async function externalWholeDiskForVolume(target: string): Promise<Extern
   const {stdout} = await run('/usr/sbin/diskutil', ['info', '-plist', target]);
   const deviceIdentifier = parentWholeDiskIdentifier(xmlValue(stdout, 'DeviceIdentifier'), xmlValue(stdout, 'ParentWholeDisk'));
   const {stdout: diskInfo} = await run('/usr/sbin/diskutil', ['info', '-plist', `/dev/${deviceIdentifier}`]);
-  if (xmlBoolean(diskInfo, 'Internal') !== false || xmlBoolean(diskInfo, 'WholeDisk') !== true) {
+  if (xmlBoolean(diskInfo, 'RemovableMediaOrExternalDevice') !== true || xmlBoolean(diskInfo, 'WholeDisk') !== true || xmlValue(diskInfo, 'VirtualOrPhysical') !== 'Physical') {
     throw new Error('Only a whole external physical disk can be formatted.');
   }
   return {
@@ -102,7 +102,7 @@ export async function listExternalWholeDisks(): Promise<ExternalDisk[]> {
   const identifiers = xmlArrayValues(stdout, 'AllDisks').filter(identifier => /^disk\d+$/.test(identifier));
   const results = await Promise.allSettled(identifiers.map(async deviceIdentifier => {
     const {stdout: info} = await run('/usr/sbin/diskutil', ['info', '-plist', `/dev/${deviceIdentifier}`]);
-    if (xmlBoolean(info, 'Internal') !== false || xmlBoolean(info, 'WholeDisk') !== true) return undefined;
+    if (xmlBoolean(info, 'RemovableMediaOrExternalDevice') !== true || xmlBoolean(info, 'WholeDisk') !== true || xmlValue(info, 'VirtualOrPhysical') !== 'Physical') return undefined;
     return {
       deviceIdentifier,
       name: xmlValue(info, 'MediaName') ?? xmlValue(info, 'IORegistryEntryName') ?? 'External disk',
@@ -135,13 +135,12 @@ export async function inspectVolume(target: string): Promise<VolumeInfo> {
   const availableBytes = Number(fields[3]) * 1024;
   const capacityBytes = Number(fields[1]) * 1024;
   const mountPoint = fields.slice(5).join(' ');
-  const internal = xmlBoolean(diskInfo, 'Internal');
   return {
     mountPoint,
     filesystem: (xmlValue(diskInfo, 'FilesystemType') ?? '').toLowerCase(),
     availableBytes,
     capacityBytes,
-    isExternal: internal === false,
+    isExternal: xmlBoolean(diskInfo, 'RemovableMediaOrExternalDevice') === true,
     isReadOnly: xmlBoolean(diskInfo, 'ReadOnlyVolume') === true,
     deviceIdentifier: xmlValue(diskInfo, 'DeviceIdentifier')
   };
@@ -158,7 +157,7 @@ export async function validateExternalApfs(target: string, minimumBytes = 0): Pr
 export async function eraseExternalDisk(deviceIdentifier: string, volumeName: string): Promise<void> {
   if (!/^disk\d+$/.test(deviceIdentifier)) throw new Error('A whole disk identifier such as disk4 is required.');
   const {stdout} = await run('/usr/sbin/diskutil', ['info', '-plist', `/dev/${deviceIdentifier}`]);
-  if (xmlBoolean(stdout, 'Internal') !== false || xmlBoolean(stdout, 'WholeDisk') !== true) {
+  if (xmlBoolean(stdout, 'RemovableMediaOrExternalDevice') !== true || xmlBoolean(stdout, 'WholeDisk') !== true || xmlValue(stdout, 'VirtualOrPhysical') !== 'Physical') {
     throw new Error('Only a whole external physical disk can be erased.');
   }
   await run('/usr/sbin/diskutil', ['eraseDisk', 'APFS', volumeName, deviceIdentifier]);
