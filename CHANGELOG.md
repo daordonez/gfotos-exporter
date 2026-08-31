@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.4.0...gfotos-migrator-v1.4.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* include removable media from integrated card readers ([3a327fd](https://github.com/daordonez/gfotos-exporter/commit/3a327fddd103669ea5a14f746e328b1f752ba413))
+* use RemovableMediaOrExternalDevice for external volume and disk detection ([981cbfa](https://github.com/daordonez/gfotos-exporter/commit/981cbfa6c0ea35b32e87ba69adc11811ce5ee7f0))
+
 ## [1.4.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.3.0...gfotos-migrator-v1.4.0) (2026-08-30)
 
 
