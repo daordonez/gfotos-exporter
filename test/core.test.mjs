@@ -543,6 +543,28 @@ test('bundle resumes from existing state and skips materialized items', async ()
   }
 });
 
+test('bundle deduplication: three identical files yield one output and two duplicate records', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-dedup3-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'a.jpg'), 'triple-identical');
+    await execute('/usr/bin/zip', ['arc1.zip', 'a.jpg'], {cwd: sourceDir});
+    await writeFile(path.join(sourceDir, 'b.jpg'), 'triple-identical');
+    await execute('/usr/bin/zip', ['arc2.zip', 'b.jpg'], {cwd: sourceDir});
+    await writeFile(path.join(sourceDir, 'c.jpg'), 'triple-identical');
+    await execute('/usr/bin/zip', ['arc3.zip', 'c.jpg'], {cwd: sourceDir});
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1, 'exactly one file should be materialized');
+    assert.equal(result.duplicate, 2, 'two duplicates should be detected');
+    assert.equal(result.failed, 0);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('importing bundle-database module does not emit the node:sqlite experimental warning', async () => {
   const root = path.resolve(fileURLToPath(import.meta.url), '../../');
   const databasePath = path.join(root, 'dist', 'bundle-database.js');

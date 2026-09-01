@@ -36,7 +36,7 @@ export class BundleDatabase {
 
   find(hash: string): BundleItem | undefined {
     const row = this.database
-      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar FROM bundle_items WHERE hash = ? LIMIT 1')
+      .prepare("SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar FROM bundle_items WHERE hash = ? AND state = 'materialized' LIMIT 1")
       .get(hash) as RawRow | undefined;
     return row ? toItem(row) : undefined;
   }
