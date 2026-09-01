@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile, mkdir} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {promisify} from 'node:util';
@@ -13,6 +13,8 @@ import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout} from '../dist/takeout.js';
 import {findAvailableUpdate, resolveExecutablePrefix, verifyInstalledVersion} from '../dist/updates.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
+import {BundleDatabase} from '../dist/bundle-database.js';
+import {initializeBundlePaths, safeImportFilename, validateBundleCompatibility, prepareBundle} from '../dist/bundle.js';
 
 const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -73,7 +75,7 @@ test('inventories photos and videos from a Takeout ZIP', async () => {
     const result = await inventoryTakeout(path.join(directory, 'takeout.zip'));
     assert.equal(result.inventory.images, 1);
     assert.equal(result.inventory.videos, 1);
-    assert.equal(result.media.find(item => item.entryPath === 'photo.jpg')?.sidecarPath, 'photo.jpg.json');
+    assert.equal(result.media.find(item => item.entryPath === 'photo.jpg')?.sidecarEntryPath, 'photo.jpg.json');
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
@@ -406,4 +408,148 @@ printf '%s\\n' "gfotos-migrator-\${semver}.tgz"
   } finally {
     await rm(tmpDir, {recursive: true, force: true});
   }
+});
+
+// ─── Bundle engine tests ────────────────────────────────────────────────────
+
+test('global pairing matches sidecar from a different archive', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-pair-'));
+  try {
+    await writeFile(path.join(directory, 'photo.jpg'), 'photo-content');
+    await writeFile(path.join(directory, 'photo.jpg.json'), JSON.stringify({photoTakenTime: {timestamp: '1700000000'}}));
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: directory});
+    await execute('/usr/bin/zip', ['archive2.zip', 'photo.jpg.json'], {cwd: directory});
+    const result = await inventoryTakeout(directory);
+    const media = result.media.find(item => item.entryPath === 'photo.jpg');
+    assert.ok(media, 'photo.jpg should be found');
+    assert.equal(media.sidecarEntryPath, 'photo.jpg.json', 'sidecar entry should be found globally');
+    assert.ok(media.sidecarArchivePath, 'sidecarArchivePath should be set for cross-archive sidecar');
+    assert.ok(media.sidecarArchivePath.endsWith('archive2.zip'), 'sidecar archive should be archive2.zip');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('flat-name collision avoidance produces unique filenames', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-col-'));
+  try {
+    const importPath = path.join(directory, 'import');
+    await mkdir(importPath, {recursive: true});
+    await writeFile(path.join(importPath, 'photo.jpg'), 'original');
+    await writeFile(path.join(importPath, 'photo~1.jpg'), 'second');
+    const name1 = await safeImportFilename(importPath, 'photo.jpg');
+    assert.equal(name1, 'photo~2.jpg');
+    const name2 = await safeImportFilename(importPath, 'other.jpg');
+    assert.equal(name2, 'other.jpg');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle-database persists and retrieves bundle items', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-db-'));
+  const db = await BundleDatabase.open(path.join(directory, 'bundle.sqlite'));
+  try {
+    const item = {hash: 'a'.repeat(64), archiveName: 'archive1.zip', entryPath: 'photo.jpg', mediaKind: 'image', state: 'materialized', hasSidecar: true, finalPath: 'photo.jpg'};
+    db.save(item);
+    const found = db.find('a'.repeat(64));
+    assert.ok(found, 'item should be found by hash');
+    assert.equal(found.state, 'materialized');
+    assert.equal(found.finalPath, 'photo.jpg');
+    const byEntry = db.findByEntry('archive1.zip', 'photo.jpg');
+    assert.ok(byEntry, 'item should be found by entry');
+    const counts = db.countByState();
+    assert.equal(counts.materialized, 1);
+    assert.equal(counts.duplicate, 0);
+    assert.equal(db.countMissingSidecars(), 0);
+  } finally {
+    db.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle works on non-APFS volume (simulated with temp dir)', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-vol-'));
+  try {
+    const paths = await initializeBundlePaths(directory);
+    assert.equal(paths.volumePath, directory);
+    assert.ok(paths.importPath.endsWith('/import'), 'importPath should end with /import');
+    assert.ok(paths.bundlePath.endsWith('/.gfotos-migrator'), 'bundlePath should end with /.gfotos-migrator');
+    const {stat: statFn} = await import('node:fs/promises');
+    await assert.doesNotReject(statFn(paths.importPath));
+    await assert.doesNotReject(statFn(paths.sidecarsPath));
+    await assert.doesNotReject(statFn(paths.reportsPath));
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle rejects incompatible source fingerprint', () => {
+  const manifest = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sourceFingerprint: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    counts: {total: 0, materialized: 0, duplicate: 0, failed: 0, skipped: 0, pending: 0, missingSidecar: 0}
+  };
+  assert.throws(
+    () => validateBundleCompatibility(manifest, 'different-fingerprint'),
+    /different source/
+  );
+});
+
+test('bundle rejects corrupt manifest (missing required fields)', () => {
+  assert.throws(
+    () => validateBundleCompatibility({version: null, createdAt: null, updatedAt: null, sourceFingerprint: 'abc', counts: {}}, 'abc'),
+    /corrupt/i
+  );
+});
+
+test('bundle deduplication: second occurrence becomes duplicate', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-dedup-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'identical-content');
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
+    await writeFile(path.join(sourceDir, 'photo2.jpg'), 'identical-content');
+    await execute('/usr/bin/zip', ['archive2.zip', 'photo2.jpg'], {cwd: sourceDir});
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1, 'one unique item should be materialized');
+    assert.equal(result.duplicate, 1, 'one duplicate should be detected');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle resumes from existing state and skips materialized items', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-resume-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-data');
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
+    const first = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(first.materialized, 1);
+    const second = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(second.materialized, 1, 'should report materialized from resume');
+    assert.equal(second.failed, 0, 'should not have failures on resume');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('importing bundle-database module does not emit the node:sqlite experimental warning', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const databasePath = path.join(root, 'dist', 'bundle-database.js');
+  const {stderr} = await new Promise((resolve, reject) => {
+    execFile(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(databasePath)})`], {encoding: 'utf8'}, (err, stdout, stderr) => {
+      if (err) reject(err); else resolve({stdout, stderr});
+    });
+  });
+  assert.ok(!(stderr.includes('ExperimentalWarning') && stderr.includes('SQLite')), `Unexpected SQLite warning on stderr: ${stderr}`);
 });

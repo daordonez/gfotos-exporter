@@ -3,13 +3,55 @@ export const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.avi', '.3gp',
 
 export type MediaKind = 'image' | 'video';
 export type MigrationStatus = 'pending' | 'imported' | 'failed' | 'unknown' | 'skipped';
+export type BundleItemState = 'pending' | 'materialized' | 'duplicate' | 'failed' | 'skipped';
 
 export interface MediaCandidate {
   archivePath: string;
   entryPath: string;
   size: number;
   kind: MediaKind;
-  sidecarPath?: string;
+  /** Entry path of the sidecar JSON within its archive. */
+  sidecarEntryPath?: string;
+  /** Archive path containing the sidecar, if different from archivePath. */
+  sidecarArchivePath?: string;
+}
+
+export interface BundlePaths {
+  volumePath: string;
+  importPath: string;
+  bundlePath: string;
+  databasePath: string;
+  sidecarsPath: string;
+  reportsPath: string;
+  manifestPath: string;
+}
+
+export interface BundleItem {
+  hash: string;
+  archiveName: string;
+  entryPath: string;
+  mediaKind: MediaKind;
+  state: BundleItemState;
+  hasSidecar: boolean;
+  finalPath?: string;
+  canonicalHash?: string;
+  error?: string;
+}
+
+export interface BundleManifest {
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  sourceFingerprint: string;
+  counts: {
+    total: number;
+    materialized: number;
+    duplicate: number;
+    failed: number;
+    skipped: number;
+    pending: number;
+    missingSidecar: number;
+  };
 }
 
 export interface TakeoutInventory {
