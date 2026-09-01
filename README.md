@@ -55,6 +55,12 @@ pnpm build
 pnpm test
 ```
 
+## AI-assisted development
+
+Repository-specific GitHub Copilot cloud agent profiles, validation boundaries,
+and the required repository settings are documented in
+[the AI agent workflow](docs/ai-agent-workflow.md).
+
 ## Continuous integration and releases
 
 Every pull request and every push to `main` runs the type check, test suite, and local package build on GitHub Actions. The resulting `.tgz` is retained as a workflow artifact for seven days.
