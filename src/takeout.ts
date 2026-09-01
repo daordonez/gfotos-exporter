@@ -71,23 +71,40 @@ export async function listTakeoutArchives(sourcePath: string): Promise<string[]>
 export async function inventoryTakeout(sourcePath: string): Promise<{inventory: TakeoutInventory; media: MediaCandidate[]}> {
   const archives = await listTakeoutArchives(sourcePath);
   const inventory: TakeoutInventory = {archives: archives.length, images: 0, videos: 0, compressedBytes: 0, extractBytes: 0, rejectedEntries: 0};
-  const media: MediaCandidate[] = [];
+
+  // Pass 1: build a global name index across all archives.
+  const globalNames = new Map<string, {archivePath: string; size: number}>();
+  const allEntries: Array<{archivePath: string; entry: ZipEntry}> = [];
   for (const archivePath of archives) {
     const entries = await entriesFor(archivePath);
-    const names = new Set(entries.map(entry => entry.fileName));
     for (const entry of entries) {
       inventory.compressedBytes += entry.compressedSize;
-      const kind = !entry.directory && isSafeArchivePath(entry.fileName) && entry.uncompressedSize <= MAX_ENTRY_BYTES ? kindFor(entry.fileName) : undefined;
-      if (!kind) {
-        if (!entry.directory && (kindFor(entry.fileName) || !isSafeArchivePath(entry.fileName))) inventory.rejectedEntries++;
-        continue;
-      }
-      const sidecarPath = names.has(`${entry.fileName}.json`) ? `${entry.fileName}.json` : undefined;
-      media.push({archivePath, entryPath: entry.fileName, size: entry.uncompressedSize, kind, sidecarPath});
-      inventory.extractBytes += entry.uncompressedSize;
-      if (kind === 'image') inventory.images++;
-      else inventory.videos++;
+      allEntries.push({archivePath, entry});
+      if (!entry.directory) globalNames.set(entry.fileName, {archivePath, size: entry.uncompressedSize});
     }
+  }
+
+  // Pass 2: pair each media entry with its sidecar (possibly from a different archive).
+  const media: MediaCandidate[] = [];
+  for (const {archivePath, entry} of allEntries) {
+    const kind = !entry.directory && isSafeArchivePath(entry.fileName) && entry.uncompressedSize <= MAX_ENTRY_BYTES ? kindFor(entry.fileName) : undefined;
+    if (!kind) {
+      if (!entry.directory && (kindFor(entry.fileName) || !isSafeArchivePath(entry.fileName))) inventory.rejectedEntries++;
+      continue;
+    }
+    const sidecarName = `${entry.fileName}.json`;
+    const sidecarSource = globalNames.get(sidecarName);
+    media.push({
+      archivePath,
+      entryPath: entry.fileName,
+      size: entry.uncompressedSize,
+      kind,
+      sidecarEntryPath: sidecarSource ? sidecarName : undefined,
+      sidecarArchivePath: sidecarSource && sidecarSource.archivePath !== archivePath ? sidecarSource.archivePath : undefined
+    });
+    inventory.extractBytes += entry.uncompressedSize;
+    if (kind === 'image') inventory.images++;
+    else inventory.videos++;
   }
   return {inventory, media};
 }

@@ -9,6 +9,7 @@ import {inventoryTakeout} from './takeout.js';
 import {eraseExternalDisk, inspectVolume, validateExternalApfs} from './volume.js';
 import {runTui} from './tui.js';
 import {VERSION} from './version.js';
+import {prepareBundle, getBundleStatus, writeBundleReport} from './bundle.js';
 
 function option(argumentsList: string[], name: string): string | undefined {
   const index = argumentsList.indexOf(name);
@@ -31,6 +32,10 @@ Usage:
   gfotos-migrator resume --source <takeout-folder> --volume <external-volume>
   gfotos-migrator status --volume <external-volume>
   gfotos-migrator report --volume <external-volume>
+  gfotos-migrator bundle-prepare --source <takeout-folder> --volume <volume>
+  gfotos-migrator bundle-resume --source <takeout-folder> --volume <volume>
+  gfotos-migrator bundle-status --volume <volume>
+  gfotos-migrator bundle-report --volume <volume>
   gfotos-migrator handoff-check --volume <external-volume> --main-library <photoslibrary>
   gfotos-migrator cleanup --volume <external-volume> --confirm-library GoogleTakeoutMigration.photoslibrary
   gfotos-migrator prepare-volume --disk <diskN> --name <volume-name> --confirm <diskN>
@@ -38,6 +43,7 @@ Usage:
 Safety:
   prepare-volume permanently erases the selected external whole disk.
   import-takeout imports only into GoogleTakeoutMigration.photoslibrary on the selected volume.
+  bundle-prepare/bundle-resume work on any writable volume without APFS or formatting requirements.
 `);
 }
 
@@ -139,6 +145,28 @@ async function cleanup(argumentsList: string[]): Promise<void> {
   console.log(`Removed isolated library: ${paths.libraryPath}`);
 }
 
+async function bundlePrepare(argumentsList: string[]): Promise<void> {
+  const source = requiredOption(argumentsList, '--source');
+  const volume = requiredOption(argumentsList, '--volume');
+  const result = await prepareBundle(path.resolve(volume), source, progress => {
+    process.stdout.write(`\r${progress.completed}/${progress.total} processed | ${progress.materialized} materialized | ${progress.duplicate} duplicate | ${progress.failed} failed`);
+  });
+  process.stdout.write('\n');
+  console.log(JSON.stringify(result, null, 2));
+}
+
+async function bundleStatus(argumentsList: string[]): Promise<void> {
+  const volume = requiredOption(argumentsList, '--volume');
+  const manifest = await getBundleStatus(path.resolve(volume));
+  console.log(JSON.stringify(manifest, null, 2));
+}
+
+async function bundleReport(argumentsList: string[]): Promise<void> {
+  const volume = requiredOption(argumentsList, '--volume');
+  const reportPath = await writeBundleReport(path.resolve(volume));
+  console.log(reportPath);
+}
+
 async function main(): Promise<void> {
   const [command = 'guided-migration', ...argumentsList] = process.argv.slice(2);
   if (command === '--help' || command === '-h' || command === 'help') return printHelp();
@@ -148,6 +176,9 @@ async function main(): Promise<void> {
   if (command === 'import-takeout' || command === 'resume') return importTakeout(argumentsList);
   if (command === 'status') return migrationStatus(requiredOption(argumentsList, '--volume'));
   if (command === 'report') return writeReport(requiredOption(argumentsList, '--volume'));
+  if (command === 'bundle-prepare' || command === 'bundle-resume') return bundlePrepare(argumentsList);
+  if (command === 'bundle-status') return bundleStatus(argumentsList);
+  if (command === 'bundle-report') return bundleReport(argumentsList);
   if (command === 'handoff-check') return handoffCheck(argumentsList);
   if (command === 'prepare-volume') return prepareVolume(argumentsList);
   if (command === 'cleanup') return cleanup(argumentsList);
