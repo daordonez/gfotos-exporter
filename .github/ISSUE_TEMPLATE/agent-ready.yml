@@ -1,0 +1,63 @@
+name: Agent-ready engineering issue
+description: Define an implementation contract that a coordinator and specialists can execute and validate.
+title: "type: concise outcome"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use one outcome per issue. State what is verifiable, what is excluded, and which manual checks remain human-only.
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What observable outcome must exist when this issue is complete?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and constraints
+      description: Include relevant architecture, compatibility, security, and data-safety constraints.
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: List the behavior, modules, and documentation that may change.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: List behavior that must not change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Use one independently verifiable checkbox per criterion.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Required validation
+      description: List automated commands and exact manual checks. State what cannot be tested in CI.
+      value: |
+        - `pnpm install --frozen-lockfile`
+        - `pnpm typecheck`
+        - `pnpm test`
+        - `pnpm pack:local`
+    validations:
+      required: true
+  - type: textarea
+    id: delivery
+    attributes:
+      label: Delivery constraints
+      description: State the required branch base, PR target, dependencies, release restriction, and authority limits.
+    validations:
+      required: true
