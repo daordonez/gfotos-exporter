@@ -35,7 +35,7 @@ export async function importCandidates(paths: MigrationPaths, candidates: MediaC
       progress.current = candidate;
       const itemDirectory = path.join(paths.workPath, `${progress.completed}`);
       const filePath = path.join(itemDirectory, path.basename(candidate.entryPath));
-      const jsonPath = candidate.sidecarPath ? path.join(itemDirectory, path.basename(candidate.sidecarPath)) : undefined;
+      const jsonPath = candidate.sidecarEntryPath ? path.join(itemDirectory, path.basename(candidate.sidecarEntryPath)) : undefined;
       try {
         await mkdir(itemDirectory, {recursive: true, mode: 0o700});
         await extractEntry(candidate.archivePath, candidate.entryPath, filePath);
@@ -46,7 +46,7 @@ export async function importCandidates(paths: MigrationPaths, candidates: MediaC
           await rm(itemDirectory, {recursive: true, force: true});
         } else {
           database.save({hash, archivePath: candidate.archivePath, entryPath: candidate.entryPath, mediaKind: candidate.kind, status: 'pending'});
-          if (candidate.sidecarPath && jsonPath) await extractEntry(candidate.archivePath, candidate.sidecarPath, jsonPath);
+          if (candidate.sidecarEntryPath && jsonPath) await extractEntry(candidate.sidecarArchivePath ?? candidate.archivePath, candidate.sidecarEntryPath, jsonPath);
           const metadata = await readTakeoutMetadata(jsonPath);
           await applyTakeoutMetadata(filePath, candidate.kind, metadata).catch(() => false);
           await importIntoOpenPhotosLibrary(filePath);
