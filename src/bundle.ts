@@ -136,7 +136,12 @@ export async function computeSourceFingerprint(archives: string[]): Promise<stri
 export async function loadManifest(paths: BundlePaths): Promise<BundleManifest | undefined> {
   try {
     const text = await readFile(paths.manifestPath, 'utf8');
-    const manifest = JSON.parse(text) as BundleManifest;
+    let manifest: BundleManifest;
+    try {
+      manifest = JSON.parse(text) as BundleManifest;
+    } catch {
+      throw new Error('Corrupt bundle manifest: JSON could not be parsed.');
+    }
     if (typeof manifest.version !== 'number' || typeof manifest.sourceFingerprint !== 'string') {
       throw new Error('Corrupt bundle manifest: missing required fields.');
     }
@@ -154,10 +159,10 @@ export async function saveManifest(paths: BundlePaths, manifest: BundleManifest)
 
 export function validateBundleCompatibility(manifest: BundleManifest, fingerprint: string): void {
   if (typeof manifest.version !== 'number' || typeof manifest.sourceFingerprint !== 'string' || typeof manifest.createdAt !== 'string') {
-    throw new Error('Bundle state is corrupt: manifest is missing required fields. Remove .gfotos-migrator/ to start fresh.');
+    throw new Error('Bundle state is corrupt: manifest is missing required fields. To start fresh, use a new empty destination or clear both import/ and .gfotos-migrator/.');
   }
   if (manifest.sourceFingerprint !== fingerprint) {
-    throw new Error('Bundle was prepared for a different source. Use the same Takeout source to resume, or remove .gfotos-migrator/ to start fresh.');
+    throw new Error('Bundle was prepared for a different source. Use the same Takeout source to resume, or start fresh on a new empty destination by clearing both import/ and .gfotos-migrator/.');
   }
 }
 

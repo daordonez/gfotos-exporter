@@ -74,8 +74,8 @@ Run `status --volume <destination-volume>` to inspect the bundle manifest: total
 Use the following recovery rules:
 
 - **Interrupted preparation:** rerun `prepare` or `resume` with the same `--source` and `--volume`. Completed items are recognized from bundle state and are not redone.
-- **Missing bundle state:** if `status` or `report` says no bundle exists on the selected volume, run `prepare` first or point the command at the correct destination root that contains both `import/` and `.gfotos-migrator/`.
-- **Corrupt bundle state:** if the manifest is missing required fields or cannot be parsed, do not edit Takeout inputs. Remove only `.gfotos-migrator/` on the destination to start fresh.
-- **Incompatible bundle state:** if the bundle was prepared from a different Takeout source, resume only with the original source. Otherwise remove `.gfotos-migrator/` and prepare a new bundle on that destination.
+- **Missing bundle state:** if `status` or `report` says no bundle exists on the selected volume, point the command at a destination with a valid `.gfotos-migrator/manifest.json`, or run `prepare` first.
+- **Corrupt bundle state:** if the manifest is missing required fields or cannot be parsed, do not edit Takeout inputs. To start fresh, use a new empty destination or manually clear both `import/` and `.gfotos-migrator/` from the existing destination before rerunning `prepare`.
+- **Incompatible bundle state:** if the bundle was prepared from a different Takeout source, resume only with the original source. Otherwise use a new empty destination or clear both `import/` and `.gfotos-migrator/` before preparing a new bundle there.
 
-Do not delete or rewrite files under `import/` to recover from bundle-state problems. Recovery always acts on the destination bundle state and never on the original Takeout ZIP archives.
+Do not delete or rewrite files under `import/` unless you are intentionally discarding the entire generated bundle and starting over. Recovery never acts on the original Takeout ZIP archives.

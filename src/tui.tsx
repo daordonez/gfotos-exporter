@@ -38,6 +38,16 @@ function failureMessage(failure: unknown): string {
   return failure instanceof Error ? failure.message : String(failure);
 }
 
+export function prepareFailureAction(message: string): string {
+  if (message.includes('Bundle was prepared for a different source')) {
+    return 'Use the original Takeout source to resume, or start fresh on a new empty destination by clearing both import/ and .gfotos-migrator/, then try again.';
+  }
+  if (message.includes('Bundle state is corrupt') || message.includes('Corrupt bundle manifest')) {
+    return 'Start fresh on a new empty destination, or manually clear both import/ and .gfotos-migrator/ before running prepare again.';
+  }
+  return 'Resolve the reported source, destination, or storage issue, then try again.';
+}
+
 function Banner(): React.JSX.Element {
   return <Box borderStyle="round" borderColor="cyan" paddingX={1}>
     <Text bold color="cyan">{PACKAGE_NAME} {VERSION}</Text>
@@ -149,8 +159,9 @@ function App(): React.JSX.Element {
       setManifest(currentManifest);
       setScreen('complete');
     } catch (failure) {
-      setError(failureMessage(failure));
-      setErrorAction('Use the original Takeout source to resume, or remove .gfotos-migrator/ on the volume to start fresh, then try again.');
+      const message = failureMessage(failure);
+      setError(message);
+      setErrorAction(prepareFailureAction(message));
       setScreen('select-volume');
     }
   };

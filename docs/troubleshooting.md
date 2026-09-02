@@ -38,7 +38,7 @@ Preparation extracts and hashes each Takeout entry independently, so a single un
 
 ## The bundle is missing on the selected destination
 
-`status` and `report` require an existing Import Bundle. If a command reports `No bundle found at the specified volume. Run \`prepare\` first.`, confirm that you pointed `--volume` at the destination root that contains both `import/` and `.gfotos-migrator/`. If the destination has never been prepared, run `prepare` first.
+`status` and `report` require an existing Import Bundle manifest. If a command reports `No bundle found at the specified volume. Run \`prepare\` first.`, confirm that you pointed `--volume` at a destination with a valid `.gfotos-migrator/manifest.json`. If the destination has never been prepared, run `prepare` first.
 
 ## A ZIP is rejected
 
@@ -54,10 +54,10 @@ The bundle status includes a `missingSidecar` count. A non-zero value means one 
 
 ## Bundle state is corrupt or incompatible
 
-If `prepare` or `resume` reports that bundle state is corrupt or was prepared for a different source, do not edit the Takeout ZIP archives and do not delete imported media to force recovery.
+If `prepare` or `resume` reports that bundle state is corrupt or was prepared for a different source, do not edit the Takeout ZIP archives or try to repair the bundle by changing only part of the generated destination data.
 
-- If the bundle was created from the same Takeout source and only the state is corrupt, remove `.gfotos-migrator/` from the destination and run `prepare` again.
-- If the bundle belongs to a different Takeout source, rerun `prepare` or `resume` with the original source path instead.
+- If the bundle was created from the same Takeout source and only the state is corrupt, use a new empty destination or manually clear both `import/` and `.gfotos-migrator/` from the destination before running `prepare` again.
+- If the bundle belongs to a different Takeout source, rerun `prepare` or `resume` with the original source path instead, or start over on a new empty destination for the new source.
 
 Recovery actions apply only to the destination bundle state. The Takeout source remains read-only.
 
