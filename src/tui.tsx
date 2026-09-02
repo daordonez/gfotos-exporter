@@ -106,7 +106,8 @@ function App(): React.JSX.Element {
       setError(undefined);
       setVolumePath(destination);
       setScreen('preparing');
-      await prepareBundle(destination, sourcePath, setProgress);
+      const result = await prepareBundle(destination, sourcePath, setProgress);
+      setProgress(result);
       setScreen('complete');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -141,7 +142,8 @@ function App(): React.JSX.Element {
       setToolsSource(path.resolve(source.trim()));
       setToolsVolume(path.resolve(volume.trim()));
       setScreen('tools-prepare-running');
-      await prepareBundle(path.resolve(volume.trim()), source.trim(), setProgress);
+      const result = await prepareBundle(path.resolve(volume.trim()), source.trim(), setProgress);
+      setProgress(result);
       setScreen('tools-prepare-result');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
