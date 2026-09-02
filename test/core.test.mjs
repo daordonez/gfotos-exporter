@@ -7,14 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
-import {MigrationDatabase} from '../dist/database.js';
-import {requiredBytes} from '../dist/migration.js';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout, readTakeoutMetadata} from '../dist/takeout.js';
 import {findAvailableUpdate, resolveExecutablePrefix, verifyInstalledVersion} from '../dist/updates.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 import {BundleDatabase} from '../dist/bundle-database.js';
-import {initializeBundlePaths, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
+import {checkBundleVolume, initializeBundlePaths, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
 import {applyTakeoutMetadata, exifToolAvailable} from '../dist/media.js';
 
 const execute = promisify(execFile);
@@ -26,8 +24,8 @@ test('rejects unsafe archive paths', () => {
   assert.equal(isSafeArchivePath('Album/photo.jpg'), true);
 });
 
-test('adds migration storage headroom', () => {
-  assert.equal(requiredBytes({archives: 1, images: 1, videos: 0, compressedBytes: 10, extractBytes: 100, rejectedEntries: 0}), 120);
+test('adds bundle storage headroom', () => {
+  assert.equal(requiredBundleBytes({archives: 1, images: 1, videos: 0, compressedBytes: 10, extractBytes: 100, rejectedEntries: 0}), 120);
 });
 
 test('creates safe APFS volume mount paths', () => {
@@ -52,16 +50,16 @@ test('resolves only a whole-disk identifier for formatting', () => {
   assert.throws(() => parentWholeDiskIdentifier('disk4s2', 'disk4s2'));
 });
 
-test('persists migration state by media hash', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-migrator-'));
-  const database = await MigrationDatabase.open(path.join(directory, 'state.sqlite'));
+test('checkBundleVolume validates writability and capacity for any filesystem', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-check-'));
   try {
-    database.save({hash: 'a'.repeat(64), archivePath: '/takeout.zip', entryPath: 'photo.jpg', mediaKind: 'image', status: 'pending'});
-    database.save({hash: 'a'.repeat(64), archivePath: '/takeout.zip', entryPath: 'photo.jpg', mediaKind: 'image', status: 'imported'});
-    assert.equal(database.find('a'.repeat(64))?.status, 'imported');
-    assert.equal(database.countByStatus().imported, 1);
+    const info = await checkBundleVolume(directory, 10);
+    assert.equal(info.writable, true);
+    assert.equal(info.sufficient, true);
+    assert.ok(info.availableBytes >= 10);
+    await assert.rejects(checkBundleVolume(directory, Number.MAX_SAFE_INTEGER), /enough free space/);
+    await assert.rejects(checkBundleVolume(path.join(directory, 'missing'), 0), /does not exist/);
   } finally {
-    database.close();
     await rm(directory, {recursive: true, force: true});
   }
 });
@@ -90,17 +88,6 @@ test('selects the newest stable release with its matching package', () => {
     {tag_name: 'v0.3.0', draft: false, prerelease: false, assets: []}
   ], '0.1.0');
   assert.deepEqual(update, {version: '0.2.0', assetId: 13, packageName: 'gfotos-migrator-0.2.0.tgz'});
-});
-
-test('importing database module does not emit the node:sqlite experimental warning', async () => {
-  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
-  const databasePath = path.join(root, 'dist', 'database.js');
-  const {stderr} = await new Promise((resolve, reject) => {
-    execFile(process.execPath, ['--input-type=module', '--eval', `await import(${JSON.stringify(databasePath)})`], {encoding: 'utf8'}, (err, stdout, stderr) => {
-      if (err) reject(err); else resolve({stdout, stderr});
-    });
-  });
-  assert.ok(!(stderr.includes('ExperimentalWarning') && stderr.includes('SQLite')), `Unexpected SQLite warning on stderr: ${stderr}`);
 });
 
 test('does not suggest draft, prerelease, malformed, or older releases', () => {
@@ -577,6 +564,79 @@ test('importing bundle-database module does not emit the node:sqlite experimenta
   assert.ok(!(stderr.includes('ExperimentalWarning') && stderr.includes('SQLite')), `Unexpected SQLite warning on stderr: ${stderr}`);
 });
 
+// ─── CLI dispatch and Import Bundle command surface ────────────────────────
+
+const cliPath = path.resolve(fileURLToPath(import.meta.url), '../../dist/cli.js');
+
+test('CLI --help documents the Import Bundle command surface and omits removed Photos-specific commands', async () => {
+  const {stdout} = await execute(process.execPath, [cliPath, '--help']);
+  for (const removed of ['doctor', 'import-takeout', 'handoff-check', 'cleanup', 'prepare-volume', 'photos-running', 'bundle-prepare', 'bundle-resume', 'bundle-status', 'bundle-report']) {
+    assert.ok(!stdout.includes(removed), `--help should not mention removed command: ${removed}`);
+  }
+  for (const kept of ['guided-migration', 'inspect', 'prepare', 'resume', 'status', 'report']) {
+    assert.ok(stdout.includes(kept), `--help should mention command: ${kept}`);
+  }
+});
+
+test('CLI rejects an unknown command with a non-zero exit code', async () => {
+  await assert.rejects(execute(process.execPath, [cliPath, 'doctor']));
+  await assert.rejects(execute(process.execPath, [cliPath, 'totally-unknown-command']));
+});
+
+async function makeSyntheticTakeout(sourceDir) {
+  await mkdir(sourceDir, {recursive: true});
+  await writeFile(path.join(sourceDir, 'photo.jpg'), 'cli-fixture-photo');
+  await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({photoTakenTime: {timestamp: '1700000000'}}));
+  await execute('/usr/bin/zip', ['takeout-1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+}
+
+test('CLI inspect/prepare/resume/status/report work end-to-end against a synthetic Takeout fixture', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-cli-bundle-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await makeSyntheticTakeout(sourceDir);
+    await mkdir(volumeDir, {recursive: true});
+
+    const inspectNoVolume = await execute(process.execPath, [cliPath, 'inspect', '--source', sourceDir]);
+    const inspected = JSON.parse(inspectNoVolume.stdout);
+    assert.equal(inspected.inventory.images, 1);
+    assert.equal(inspected.volume, undefined);
+
+    const inspectWithVolume = await execute(process.execPath, [cliPath, 'inspect', '--source', sourceDir, '--volume', volumeDir]);
+    const inspectedWithVolume = JSON.parse(inspectWithVolume.stdout);
+    assert.equal(inspectedWithVolume.volume.sufficient, true);
+    assert.equal(inspectedWithVolume.volumeError, undefined);
+
+    const prepared = await execute(process.execPath, [cliPath, 'prepare', '--source', sourceDir, '--volume', volumeDir]);
+    const preparedLines = prepared.stdout.trim().split('\n');
+    const preparedResult = JSON.parse(preparedLines.slice(preparedLines.findIndex(line => line.startsWith('{'))).join('\n'));
+    assert.equal(preparedResult.materialized, 1);
+    assert.equal(preparedResult.failed, 0);
+
+    const resumed = await execute(process.execPath, [cliPath, 'resume', '--source', sourceDir, '--volume', volumeDir]);
+    const resumedLines = resumed.stdout.trim().split('\n');
+    const resumedResult = JSON.parse(resumedLines.slice(resumedLines.findIndex(line => line.startsWith('{'))).join('\n'));
+    assert.equal(resumedResult.materialized, 1);
+    assert.equal(resumedResult.failed, 0);
+
+    const status = await execute(process.execPath, [cliPath, 'status', '--volume', volumeDir]);
+    const manifest = JSON.parse(status.stdout);
+    assert.equal(manifest.counts.materialized, 1);
+
+    const report = await execute(process.execPath, [cliPath, 'report', '--volume', volumeDir]);
+    const reportPath = report.stdout.trim();
+    assert.ok(reportPath.includes('.gfotos-migrator'));
+    const {stat: statFn, readdir: readdirFn} = await import('node:fs/promises');
+    await assert.doesNotReject(statFn(reportPath));
+
+    const rootEntries = await readdirFn(volumeDir);
+    assert.deepEqual([...rootEntries].sort(), ['.gfotos-migrator', 'import']);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 // --- Metadata: sidecar parsing ---
 
 test('readTakeoutMetadata parses dates, GPS, title, and description from a full sidecar', async () => {
@@ -800,6 +860,16 @@ test('prepareBundle records a metadata conflict when duplicate media has diverge
   }
 });
 
+test('CLI status/report reject a volume without a prepared bundle', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-cli-nobundle-'));
+  try {
+    await assert.rejects(execute(process.execPath, [cliPath, 'status', '--volume', directory]));
+    await assert.rejects(execute(process.execPath, [cliPath, 'report', '--volume', directory]));
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('prepareBundle materializes media even when the sidecar JSON is malformed', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-badjson-'));
   try {
@@ -826,6 +896,31 @@ test('prepareBundle materializes media even when the sidecar JSON is malformed',
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
+});
+
+test('compiled CLI and TUI no longer reference Apple Photos automation', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const {readFile: readFileFn} = await import('node:fs/promises');
+  const cliSource = await readFileFn(path.join(root, 'dist', 'cli.js'), 'utf8');
+  const tuiSource = await readFileFn(path.join(root, 'dist', 'tui.js'), 'utf8');
+  for (const source of [cliSource, tuiSource]) {
+    assert.ok(!source.includes('./photos.js'), 'compiled output must not import the Photos automation module');
+    assert.ok(!source.includes('osascript'), 'compiled output must not reference AppleScript automation');
+  }
+});
+
+test('compiled TUI exposes the exact root menu and Tools submenu labels', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const {readFile: readFileFn} = await import('node:fs/promises');
+  const tuiSource = await readFileFn(path.join(root, 'dist', 'tui.js'), 'utf8');
+  for (const label of ['Start guided migration', 'Tools']) {
+    assert.ok(tuiSource.includes(label), `root menu should include: ${label}`);
+  }
+  for (const label of ['Inspect Takeout', 'Prepare or resume Import Bundle', 'Status', 'Report', 'Back']) {
+    assert.ok(tuiSource.includes(label), `Tools submenu should include: ${label}`);
+  }
+  assert.ok(!tuiSource.includes('Waiting for the new library to appear'), 'the Photos library wait screen must be removed');
+  assert.ok(!tuiSource.includes('erase-confirmation'), 'the disk erase confirmation screen must be removed');
 });
 
 test('prepareBundle materializes media when there is no sidecar at all', async () => {

@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
-import {rename, stat, writeFile, readFile, mkdir, unlink} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {access, rename, stat, statfs, writeFile, readFile, mkdir, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {BundleDatabase} from './bundle-database.js';
-import type {BundleItem, BundleManifest, BundlePaths, MetadataField, MetadataFieldStatuses, TakeoutMetadata} from './domain.js';
+import type {BundleItem, BundleManifest, BundlePaths, MetadataField, MetadataFieldStatuses, TakeoutInventory, TakeoutMetadata} from './domain.js';
 import {METADATA_FIELDS, metadataFieldValue, metadataHasField} from './domain.js';
 import {extractEntry, inventoryTakeout, listTakeoutArchives, readTakeoutMetadataWithState, sha256File} from './takeout.js';
 import {applyTakeoutMetadata} from './media.js';
@@ -16,6 +17,47 @@ export interface BundleProgress {
   failed: number;
   skipped: number;
   current?: string;
+}
+
+export interface BundleVolumeInfo {
+  path: string;
+  writable: boolean;
+  availableBytes: number;
+  requiredBytes: number;
+  sufficient: boolean;
+}
+
+/** Bytes required on the destination volume: the uncompressed media size plus 20 percent headroom. */
+export function requiredBundleBytes(inventory: TakeoutInventory): number {
+  return Math.ceil(inventory.extractBytes * 1.2);
+}
+
+/**
+ * Validates that a destination path is an existing, writable directory with
+ * enough free space for the bundle. This check is filesystem-agnostic: it
+ * accepts any writable volume, not only APFS.
+ */
+export async function checkBundleVolume(volumePath: string, minimumBytes = 0): Promise<BundleVolumeInfo> {
+  const resolved = path.resolve(volumePath);
+  let info;
+  try {
+    info = await stat(resolved);
+  } catch {
+    throw new Error(`The selected volume path does not exist or is not mounted: ${resolved}`);
+  }
+  if (!info.isDirectory()) throw new Error(`The selected volume path is not a directory: ${resolved}`);
+  try {
+    await access(resolved, constants.W_OK);
+  } catch {
+    throw new Error(`The selected volume is not writable: ${resolved}`);
+  }
+  const usage = await statfs(resolved);
+  const availableBytes = usage.bavail * usage.bsize;
+  const sufficient = availableBytes >= minimumBytes;
+  if (!sufficient) {
+    throw new Error(`The selected volume does not have enough free space. Required: ${minimumBytes} bytes, available: ${availableBytes} bytes.`);
+  }
+  return {path: resolved, writable: true, availableBytes, requiredBytes: minimumBytes, sufficient};
 }
 
 /**
@@ -140,6 +182,7 @@ export async function prepareBundle(
   sourcePath: string,
   onProgress: (progress: BundleProgress) => void
 ): Promise<BundleProgress> {
+  const {inventory, media} = await inventoryTakeout(sourcePath);
   const paths = await initializeBundlePaths(volumePath);
   const archives = await listTakeoutArchives(sourcePath);
   const fingerprint = await computeSourceFingerprint(archives);
@@ -160,11 +203,22 @@ export async function prepareBundle(
     };
   }
 
-  const {media} = await inventoryTakeout(sourcePath);
   const database = await BundleDatabase.open(paths.databasePath);
   const progress: BundleProgress = {completed: 0, total: media.length, materialized: 0, duplicate: 0, failed: 0, skipped: 0};
 
   try {
+    // Only require free space for items that are not already materialized, duplicate, or
+    // skipped, so resuming a partially completed bundle does not demand the full original
+    // requirement again against space already consumed by previously written output.
+    let pendingBytes = 0;
+    for (const candidate of media) {
+      const archiveName = path.basename(candidate.archivePath);
+      const existing = database.findByEntry(archiveName, candidate.entryPath);
+      if (existing?.state === 'materialized' || existing?.state === 'duplicate' || existing?.state === 'skipped') continue;
+      pendingBytes += candidate.size;
+    }
+    await checkBundleVolume(volumePath, Math.ceil(pendingBytes * 1.2));
+
     for (const candidate of media) {
       const archiveName = path.basename(candidate.archivePath);
       progress.current = candidate.entryPath;
@@ -303,14 +357,14 @@ export async function prepareBundle(
 export async function getBundleStatus(volumePath: string): Promise<BundleManifest> {
   const paths = await initializeBundlePaths(volumePath);
   const manifest = await loadManifest(paths);
-  if (!manifest) throw new Error('No bundle found at the specified volume. Run bundle-prepare first.');
+  if (!manifest) throw new Error('No bundle found at the specified volume. Run `prepare` first.');
   return manifest;
 }
 
 export async function writeBundleReport(volumePath: string): Promise<string> {
   const paths = await initializeBundlePaths(volumePath);
   const manifest = await loadManifest(paths);
-  if (!manifest) throw new Error('No bundle found at the specified volume. Run bundle-prepare first.');
+  if (!manifest) throw new Error('No bundle found at the specified volume. Run `prepare` first.');
   const database = await BundleDatabase.open(paths.databasePath);
   try {
     const items = database.listItems();

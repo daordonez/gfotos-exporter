@@ -1,10 +1,10 @@
 # gfotos-migrator
 
-A local macOS tool that imports Google Photos Takeout ZIP archives into an isolated Photos library on an external APFS volume. It does not modify the main Photos library during migration.
+A local tool that prepares a Google Photos Takeout export as an **Import Bundle**: a flat `import/` directory of deduplicated original photos and videos, plus their Google Takeout sidecar metadata, on any writable destination volume with enough free capacity. It never modifies Takeout inputs, does not require macOS, Photos, iCloud, or an APFS-formatted volume, and never automates an import into Photos. After preparation you manually open Photos (or another tool of your choice) and import the files under the reported `import/` path.
 
 ## Installation
 
-The installer prepares Node.js, npm, and ExifTool, displays the three latest published releases, and makes `gfotos-migrator` available to the current user. Pressing Enter selects the latest release.
+The installer prepares Node.js and npm, displays the three latest published releases, and makes `gfotos-migrator` available to the current user. Pressing Enter selects the latest release.
 
 1. Clone the repository:
 
@@ -21,7 +21,7 @@ chmod +x install-gfotos-migrator.sh
 gfotos-migrator --help
 ```
 
-The installer supports macOS and Linux for dependency installation. Migration itself requires macOS, Photos, and an external APFS volume.
+The installer supports macOS and Linux for dependency installation. Bundle preparation itself works on any platform Node.js supports and only requires a writable destination path with enough free space; it does not require Photos, iCloud, or an external disk.
 
 ## Usage
 
@@ -31,7 +31,7 @@ Start the guided workflow:
 gfotos-migrator guided-migration
 ```
 
-When guided migration starts, the tool checks published GitHub Releases and offers to install a newer stable version. The update installs into the same npm prefix that owns the resolved executable and verifies the installed version before prompting a restart. Rejecting the prompt continues migration without changes. No GitHub account or token is required.
+When guided migration starts, the tool checks published GitHub Releases and offers to install a newer stable version. The update installs into the same npm prefix that owns the resolved executable and verifies the installed version before prompting a restart. Rejecting the prompt continues without changes. No GitHub account or token is required.
 
 To upgrade from version `0.0.0` or any release that predates the in-app updater, rerun the installer:
 
@@ -41,11 +41,23 @@ To upgrade from version `0.0.0` or any release that predates the in-app updater,
 
 See the [upgrade compatibility matrix](docs/operations.md#upgrade-compatibility-matrix) for the full version table and repair steps.
 
-The target library is `GoogleTakeoutMigration.photoslibrary`. It must remain outside iCloud Photos and cannot be the System Photo Library. Takeout ZIP archives are treated as read-only input.
+Google Takeout ZIP archives are treated as read-only input and are never modified. The guided workflow inventories the Takeout source, lets you select a writable destination volume with enough free space, and prepares the Import Bundle: a flat `import/` directory containing deduplicated original files plus a `.gfotos-migrator/` state directory (manifest, SQLite state, extracted sidecar metadata, and reports). The bundle is resumable: rerunning preparation with the same source and destination continues from where it left off instead of redoing completed work.
 
-After selecting a source folder with Takeout ZIP archives, guided migration automatically discovers and lists available external volumes for selection. The list includes the volume name, filesystem, available space, and total capacity. System volumes, Time Machine destinations, and read-only volumes are excluded. If an APFS volume with sufficient space is selected, it is used immediately. If a non-APFS volume or a volume without enough space is selected, the workflow proceeds to format the volume's entire physical disk after exact whole-disk identifier confirmation. The default descriptive volume name is `GPhotos_Export` and can be changed before formatting. If no selectable external volume is connected, the workflow offers the option to format an external disk or cancel the migration.
+After preparation completes, open Photos (or your preferred tool) and manually import the files under the reported `import/` path. `gfotos-migrator` does not automate Photos import, does not request Automation permission, and does not touch iCloud settings.
 
-To erase and prepare an external disk, use `prepare-volume` only after confirming its identifier in Disk Utility or with `diskutil list`: this operation deletes all contents of the selected disk.
+Non-interactive commands back the same guided workflow and are suitable for scripting:
+
+```sh
+gfotos-migrator inspect --source <takeout-folder> [--volume <destination-volume>]
+gfotos-migrator prepare --source <takeout-folder> --volume <destination-volume>
+gfotos-migrator resume --source <takeout-folder> --volume <destination-volume>
+gfotos-migrator status --volume <destination-volume>
+gfotos-migrator report --volume <destination-volume>
+```
+
+`inspect` reports the Takeout inventory and, when `--volume` is given, validates that the destination is writable and has enough free capacity. `prepare` and `resume` both call the same resumable bundle engine. `status` prints the current bundle manifest, and `report` writes a Markdown summary under `.gfotos-migrator/reports` on the destination volume.
+
+Outside the guided workflow, a "Tools" menu offers the same actions (Inspect Takeout, Prepare or resume Import Bundle, Status, Report) interactively.
 
 ## Development
 
