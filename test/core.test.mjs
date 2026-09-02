@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile, mkdir} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile, readFile, mkdir} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {promisify} from 'node:util';
@@ -8,11 +8,12 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {isSafeArchivePath} from '../dist/system.js';
-import {inventoryTakeout} from '../dist/takeout.js';
+import {inventoryTakeout, readTakeoutMetadata} from '../dist/takeout.js';
 import {findAvailableUpdate, resolveExecutablePrefix, verifyInstalledVersion} from '../dist/updates.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 import {BundleDatabase} from '../dist/bundle-database.js';
-import {checkBundleVolume, initializeBundlePaths, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle} from '../dist/bundle.js';
+import {checkBundleVolume, initializeBundlePaths, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
+import {applyTakeoutMetadata, exifToolAvailable} from '../dist/media.js';
 
 const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -636,11 +637,262 @@ test('CLI inspect/prepare/resume/status/report work end-to-end against a synthet
   }
 });
 
+// --- Metadata: sidecar parsing ---
+
+test('readTakeoutMetadata parses dates, GPS, title, and description from a full sidecar', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-metadata-full-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, JSON.stringify({
+      title: 'My Photo',
+      description: 'A lovely day',
+      photoTakenTime: {timestamp: '1609459200'}, // 2021-01-01T00:00:00Z
+      creationTime: {timestamp: '1609000000'},
+      geoData: {latitude: 48.8566, longitude: 2.3522, altitude: 35.0}
+    }));
+    const metadata = await readTakeoutMetadata(jsonPath);
+    assert.equal(metadata.title, 'My Photo');
+    assert.equal(metadata.description, 'A lovely day');
+    assert.equal(metadata.takenAt.toISOString(), new Date(1609459200 * 1000).toISOString());
+    assert.equal(metadata.latitude, 48.8566);
+    assert.equal(metadata.longitude, 2.3522);
+    assert.equal(metadata.altitude, 35.0);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('readTakeoutMetadata parses a video sidecar with full fields', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-metadata-video-'));
+  try {
+    const jsonPath = path.join(directory, 'clip.mov.json');
+    await writeFile(jsonPath, JSON.stringify({
+      title: 'My Clip',
+      description: 'A short video',
+      photoTakenTime: {timestamp: '1609459200'},
+      geoData: {latitude: -33.8688, longitude: 151.2093, altitude: 12.0}
+    }));
+    const metadata = await readTakeoutMetadata(jsonPath);
+    assert.equal(metadata.title, 'My Clip');
+    assert.equal(metadata.description, 'A short video');
+    assert.equal(metadata.latitude, -33.8688);
+    assert.equal(metadata.longitude, 151.2093);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('readTakeoutMetadata returns empty metadata for a missing sidecar', async () => {
+  const metadata = await readTakeoutMetadata(undefined);
+  assert.deepEqual(metadata, {});
+});
+
+test('readTakeoutMetadata returns empty metadata for invalid JSON without throwing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-metadata-invalid-'));
+  try {
+    const jsonPath = path.join(directory, 'broken.json');
+    await writeFile(jsonPath, '{ this is not valid json ');
+    let metadata;
+    await assert.doesNotReject(async () => { metadata = await readTakeoutMetadata(jsonPath); });
+    assert.deepEqual(metadata, {});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('readTakeoutMetadata falls back to creationTime when photoTakenTime is absent', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-metadata-fallback-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, JSON.stringify({creationTime: {timestamp: '1609000000'}}));
+    const metadata = await readTakeoutMetadata(jsonPath);
+    assert.equal(metadata.takenAt.toISOString(), new Date(1609000000 * 1000).toISOString());
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('readTakeoutMetadata treats geoData of (0, 0) as absent location', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-metadata-nogeo-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, JSON.stringify({photoTakenTime: {timestamp: '1609459200'}, geoData: {latitude: 0, longitude: 0, altitude: 0}}));
+    const metadata = await readTakeoutMetadata(jsonPath);
+    assert.equal(metadata.latitude, undefined);
+    assert.equal(metadata.longitude, undefined);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// --- Metadata: applying to output media via ExifTool ---
+
+const HAS_EXIFTOOL = await exifToolAvailable();
+
+/** Minimal but structurally valid MP4 container (ftyp + moov boxes) that ExifTool will accept. */
+function buildMinimalMp4() {
+  const box = (type, data = Buffer.alloc(0)) => {
+    const header = Buffer.alloc(8);
+    header.writeUInt32BE(8 + data.length, 0);
+    header.write(type, 4, 'ascii');
+    return Buffer.concat([header, data]);
+  };
+  const ftypData = Buffer.concat([Buffer.from('isom', 'ascii'), Buffer.alloc(4), Buffer.from('isomiso2avc1mp41', 'ascii')]);
+  const ftyp = box('ftyp', ftypData);
+  const moov = box('moov', box('mvhd', Buffer.alloc(100)));
+  return Buffer.concat([ftyp, moov]);
+}
+
+// A tiny (2x2 pixel) but structurally valid JPEG, so ExifTool can actually write and verify tags.
+const MINIMAL_VALID_JPEG_BASE64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAACAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDFoooryz7w/9k=';
+
+test('applyTakeoutMetadata embeds dates, GPS, title, and description into a JPEG', {skip: !HAS_EXIFTOOL && 'exiftool is not installed in this environment'}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-jpg-'));
+  try {
+    const filePath = path.join(directory, 'photo.jpg');
+    await writeFile(filePath, Buffer.from(MINIMAL_VALID_JPEG_BASE64, 'base64'));
+    const metadata = {
+      takenAt: new Date('2021-01-01T00:00:00.000Z'),
+      title: 'My Photo',
+      description: 'A lovely day',
+      latitude: 48.8566,
+      longitude: 2.3522,
+      altitude: 35
+    };
+    const statuses = await applyTakeoutMetadata(filePath, 'image', metadata);
+    assert.equal(statuses.takenAt, 'applied');
+    assert.equal(statuses.title, 'applied');
+    assert.equal(statuses.description, 'applied');
+    assert.equal(statuses.latitude, 'applied');
+    assert.equal(statuses.longitude, 'applied');
+    assert.equal(statuses.altitude, 'applied');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('applyTakeoutMetadata embeds dates, GPS, and title into a minimal MP4', {skip: !HAS_EXIFTOOL && 'exiftool is not installed in this environment'}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-mp4-'));
+  try {
+    const filePath = path.join(directory, 'clip.mp4');
+    await writeFile(filePath, buildMinimalMp4());
+    const metadata = {
+      takenAt: new Date('2021-01-01T00:00:00.000Z'),
+      title: 'My Clip',
+      description: 'A short video',
+      latitude: -33.8688,
+      longitude: 151.2093
+    };
+    const statuses = await applyTakeoutMetadata(filePath, 'video', metadata);
+    assert.equal(statuses.takenAt, 'applied');
+    assert.equal(statuses.title, 'applied');
+    assert.equal(statuses.description, 'applied');
+    assert.equal(statuses.latitude, 'applied');
+    assert.equal(statuses.longitude, 'applied');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('applyTakeoutMetadata reports no field statuses when the sidecar had no values', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-empty-'));
+  try {
+    const filePath = path.join(directory, 'photo.jpg');
+    await writeFile(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const statuses = await applyTakeoutMetadata(filePath, 'image', {});
+    assert.deepEqual(statuses, {});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('applyTakeoutMetadata marks fields unsupported when ExifTool cannot process the file', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-corrupt-'));
+  try {
+    const filePath = path.join(directory, 'not-really-a-photo.jpg');
+    // Bytes that are not a valid image in any format ExifTool recognizes for writing.
+    await writeFile(filePath, Buffer.from('this is definitely not an image file, just plain garbage bytes'));
+    const statuses = await applyTakeoutMetadata(filePath, 'image', {title: 'Won\u2019t stick'});
+    assert.equal(statuses.title, 'unsupported');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// --- Metadata: bundle-level conflict detection and reporting ---
+
+test('prepareBundle records a metadata conflict when duplicate media has divergent sidecar values', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-conflict-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'identical-bytes-for-conflict-test');
+    await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({title: 'Original Title', photoTakenTime: {timestamp: '1609459200'}}));
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+
+    await writeFile(path.join(sourceDir, 'photo-copy.jpg'), 'identical-bytes-for-conflict-test');
+    await writeFile(path.join(sourceDir, 'photo-copy.jpg.json'), JSON.stringify({title: 'Different Title', photoTakenTime: {timestamp: '1609459200'}}));
+    await execute('/usr/bin/zip', ['archive2.zip', 'photo-copy.jpg', 'photo-copy.jpg.json'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1);
+    assert.equal(result.duplicate, 1);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const db = await BundleDatabase.open(paths.databasePath);
+    try {
+      const conflicts = db.listConflicts();
+      const titleConflict = conflicts.find(conflict => conflict.field === 'title');
+      assert.ok(titleConflict, 'a title conflict should be recorded');
+      const values = titleConflict.values.map(v => v.value).sort();
+      assert.deepEqual(values, ['Different Title', 'Original Title']);
+
+      const counts = db.countMetadata();
+      assert.equal(counts.conflicting, 1, 'exactly one field should be flagged as conflicting');
+    } finally {
+      db.close();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('CLI status/report reject a volume without a prepared bundle', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-cli-nobundle-'));
   try {
     await assert.rejects(execute(process.execPath, [cliPath, 'status', '--volume', directory]));
     await assert.rejects(execute(process.execPath, [cliPath, 'report', '--volume', directory]));
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('prepareBundle materializes media even when the sidecar JSON is malformed', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-badjson-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-bytes');
+    await writeFile(path.join(sourceDir, 'photo.jpg.json'), '{ not valid json at all');
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1, 'media should materialize despite invalid sidecar JSON');
+    assert.equal(result.failed, 0);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const db = await BundleDatabase.open(paths.databasePath);
+    try {
+      const counts = db.countMetadata();
+      assert.ok(counts.invalid > 0, 'invalid sidecar fields should be counted');
+    } finally {
+      db.close();
+    }
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
@@ -670,3 +922,53 @@ test('compiled TUI exposes the exact root menu and Tools submenu labels', async 
   assert.ok(!tuiSource.includes('Waiting for the new library to appear'), 'the Photos library wait screen must be removed');
   assert.ok(!tuiSource.includes('erase-confirmation'), 'the disk erase confirmation screen must be removed');
 });
+
+test('prepareBundle materializes media when there is no sidecar at all', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-nosidecar-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-bytes-no-sidecar');
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1);
+    assert.equal(result.failed, 0);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const db = await BundleDatabase.open(paths.databasePath);
+    try {
+      const counts = db.countMetadata();
+      assert.ok(counts.missing > 0, 'fields without a sidecar should be counted as missing');
+    } finally {
+      db.close();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('writeBundleReport includes a Metadata section with counts and conflicts', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-report-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'report-photo-bytes');
+    await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({title: 'Report Title', photoTakenTime: {timestamp: '1609459200'}}));
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+    await prepareBundle(volumeDir, sourceDir, () => {});
+
+    const reportPath = await writeBundleReport(volumeDir);
+    const report = await readFile(reportPath, 'utf8');
+    assert.match(report, /## Metadata/);
+    assert.match(report, /applied \(embedded into output media\)/);
+    assert.match(report, /conflicting \(same hash, divergent sidecar values\)/);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
