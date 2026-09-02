@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.4.1...gfotos-migrator-v1.5.0) (2026-09-02)
+
+
+### Features
+
+* **bundle:** implement portable Import Bundle engine ([#33](https://github.com/daordonez/gfotos-exporter/issues/33)) ([0290c47](https://github.com/daordonez/gfotos-exporter/commit/0290c474873e49570048238a8ad3bece6dc1ad3a))
+
+
+### Bug Fixes
+
+* **bundle:** dedup find() queries only materialized rows; add 3-copy test ([aaa095d](https://github.com/daordonez/gfotos-exporter/commit/aaa095d42beb685dc7ef3cea7e849c28e3319509))
+
 ## [1.4.1](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.4.0...gfotos-migrator-v1.4.1) (2026-08-31)
 
 
