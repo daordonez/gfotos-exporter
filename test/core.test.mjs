@@ -10,9 +10,10 @@ import test from 'node:test';
 import {isSafeArchivePath} from '../dist/system.js';
 import {inventoryTakeout, readTakeoutMetadata} from '../dist/takeout.js';
 import {findAvailableUpdate, resolveExecutablePrefix, verifyInstalledVersion} from '../dist/updates.js';
+import {prepareFailureAction} from '../dist/tui.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 import {BundleDatabase} from '../dist/bundle-database.js';
-import {checkBundleVolume, initializeBundlePaths, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
+import {checkBundleVolume, initializeBundlePaths, loadManifest, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
 import {applyTakeoutMetadata, exifToolAvailable} from '../dist/media.js';
 
 const execute = promisify(execFile);
@@ -484,6 +485,10 @@ test('bundle rejects incompatible source fingerprint', () => {
     () => validateBundleCompatibility(manifest, 'different-fingerprint'),
     /different source/
   );
+  assert.throws(
+    () => validateBundleCompatibility(manifest, 'different-fingerprint'),
+    /clear(?:ing)? both import\/ and \.gfotos-migrator\//
+  );
 });
 
 test('bundle rejects corrupt manifest (missing required fields)', () => {
@@ -491,6 +496,21 @@ test('bundle rejects corrupt manifest (missing required fields)', () => {
     () => validateBundleCompatibility({version: null, createdAt: null, updatedAt: null, sourceFingerprint: 'abc', counts: {}}, 'abc'),
     /corrupt/i
   );
+  assert.throws(
+    () => validateBundleCompatibility({version: null, createdAt: null, updatedAt: null, sourceFingerprint: 'abc', counts: {}}, 'abc'),
+    /clear(?:ing)? both import\/ and \.gfotos-migrator\//
+  );
+});
+
+test('loadManifest rejects corrupt manifest JSON with a stable error', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-manifest-'));
+  try {
+    const paths = await initializeBundlePaths(directory);
+    await writeFile(paths.manifestPath, '{not-json');
+    await assert.rejects(loadManifest(paths), /Corrupt bundle manifest: JSON could not be parsed/);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
 });
 
 test('bundle deduplication: second occurrence becomes duplicate', async () => {
@@ -909,6 +929,25 @@ test('compiled CLI and TUI no longer reference Apple Photos automation', async (
   }
 });
 
+test('prepareFailureAction limits fresh-start guidance to bundle-state errors', () => {
+  assert.match(
+    prepareFailureAction('Bundle state is corrupt: manifest is missing required fields.'),
+    /clear both import\/ and \.gfotos-migrator\//
+  );
+  assert.match(
+    prepareFailureAction('Bundle was prepared for a different source.'),
+    /Use the original Takeout source to resume/
+  );
+  assert.match(
+    prepareFailureAction('Corrupt bundle manifest: JSON could not be parsed.'),
+    /Start fresh on a new empty destination/
+  );
+  assert.equal(
+    prepareFailureAction('The selected volume does not have enough free space.'),
+    'Resolve the reported source, destination, or storage issue, then try again.'
+  );
+});
+
 test('compiled TUI exposes the exact root menu and Tools submenu labels', async () => {
   const root = path.resolve(fileURLToPath(import.meta.url), '../../');
   const {readFile: readFileFn} = await import('node:fs/promises');
@@ -921,6 +960,10 @@ test('compiled TUI exposes the exact root menu and Tools submenu labels', async 
   }
   assert.ok(!tuiSource.includes('Waiting for the new library to appear'), 'the Photos library wait screen must be removed');
   assert.ok(!tuiSource.includes('erase-confirmation'), 'the disk erase confirmation screen must be removed');
+  assert.ok(
+    tuiSource.includes('Use the original Takeout source to resume, or start fresh on a new empty destination by clearing both import/ and .gfotos-migrator/, then try again.'),
+    'resume guidance should explain that a fresh restart must clear both import/ and bundle state'
+  );
 });
 
 test('prepareBundle materializes media when there is no sidecar at all', async () => {
@@ -971,4 +1014,3 @@ test('writeBundleReport includes a Metadata section with counts and conflicts', 
     await rm(directory, {recursive: true, force: true});
   }
 });
-
