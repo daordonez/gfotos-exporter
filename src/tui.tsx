@@ -1,18 +1,29 @@
 import path from 'node:path';
-import {exists} from './system.js';
 import React, {useEffect, useState} from 'react';
 import {Box, render, Text, useApp} from 'ink';
 import {Alert, ConfirmInput, ProgressBar, Select, Spinner, StatusMessage, TextInput} from '@inkjs/ui';
-import {exifToolAvailable, installExifTool} from './media.js';
-import {importCandidates, initializePaths, requiredBytes, type ImportProgress} from './migration.js';
-import {openPhotosLibrary} from './photos.js';
+import {checkBundleVolume, getBundleStatus, prepareBundle, requiredBundleBytes, writeBundleReport, type BundleProgress, type BundleVolumeInfo} from './bundle.js';
 import {inventoryTakeout} from './takeout.js';
 import {checkForUpdate, installUpdate, type AvailableUpdate} from './updates.js';
 import {VERSION, PACKAGE_NAME} from './version.js';
-import {eraseExternalDisk, externalWholeDiskForVolume, listExternalWholeDisks, listSelectableExternalVolumes, validateExternalApfs, volumeMountPath, type ExternalDisk, type ExternalVolume} from './volume.js';
-import type {MediaCandidate, TakeoutInventory} from './domain.js';
+import {listSelectableExternalVolumes, type ExternalVolume} from './volume.js';
+import type {BundleManifest, TakeoutInventory} from './domain.js';
 
-type Screen = 'checking-update' | 'update-available' | 'updating' | 'update-complete' | 'menu' | 'source' | 'storage' | 'select-volume' | 'select-disk' | 'volume-name' | 'erase-confirmation' | 'formatting' | 'dependency' | 'installing-dependency' | 'library' | 'confirm' | 'running' | 'complete' | 'no-external-volume';
+type Screen =
+  | 'checking-update' | 'update-available' | 'updating' | 'update-complete'
+  | 'menu' | 'tools'
+  | 'source' | 'select-volume' | 'no-external-volume' | 'confirm' | 'preparing' | 'complete'
+  | 'tools-inspect-source' | 'tools-inspect-volume' | 'tools-inspect-result'
+  | 'tools-status-volume' | 'tools-status-result'
+  | 'tools-report-volume' | 'tools-report-result';
+
+interface InspectResult {
+  source: string;
+  inventory: TakeoutInventory;
+  requiredBytes: number;
+  volumeInfo?: BundleVolumeInfo;
+  volumeError?: string;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -23,6 +34,10 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[index]}`;
 }
 
+function failureMessage(failure: unknown): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}
+
 function Banner(): React.JSX.Element {
   return <Box borderStyle="round" borderColor="cyan" paddingX={1}>
     <Text bold color="cyan">{PACKAGE_NAME} {VERSION}</Text>
@@ -30,20 +45,25 @@ function Banner(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
-  const {exit} = useApp();
   const [screen, setScreen] = useState<Screen>('checking-update');
   const [sourcePath, setSourcePath] = useState('');
   const [volumePath, setVolumePath] = useState('');
-  const [volumeName, setVolumeName] = useState('GPhotos_Export');
-  const [selectedDisk, setSelectedDisk] = useState<ExternalDisk>();
-  const [externalDisks, setExternalDisks] = useState<ExternalDisk[]>([]);
   const [externalVolumes, setExternalVolumes] = useState<ExternalVolume[]>([]);
   const [inventory, setInventory] = useState<TakeoutInventory>();
-  const [candidates, setCandidates] = useState<MediaCandidate[]>([]);
   const [error, setError] = useState<string>();
-  const [progress, setProgress] = useState<ImportProgress>();
-  const [libraryReady, setLibraryReady] = useState(false);
+  const [errorAction, setErrorAction] = useState<string>();
+  const [progress, setProgress] = useState<BundleProgress>();
+  const [manifest, setManifest] = useState<BundleManifest>();
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
+
+  // Tools > Inspect Takeout
+  const [inspectSourcePath, setInspectSourcePath] = useState('');
+  const [inspectInventory, setInspectInventory] = useState<TakeoutInventory>();
+  const [inspectResult, setInspectResult] = useState<InspectResult>();
+
+  // Tools > Status / Report
+  const [statusManifest, setStatusManifest] = useState<BundleManifest>();
+  const [reportPath, setReportPath] = useState<string>();
 
   const checkUpdates = async (): Promise<void> => {
     try {
@@ -54,7 +74,7 @@ function App(): React.JSX.Element {
         return;
       }
     } catch {
-      // A release lookup failure must not block a local migration.
+      // A release lookup failure must not block bundle preparation.
     }
     setScreen('menu');
   };
@@ -67,238 +87,277 @@ function App(): React.JSX.Element {
       await installUpdate(availableUpdate);
       setScreen('update-complete');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setError(failureMessage(failure));
       setScreen('update-available');
     }
   };
 
   useEffect(() => { void checkUpdates(); }, []);
 
-  const continueAfterStorage = async (): Promise<void> => {
-    if (await exifToolAvailable()) setScreen('library');
-    else setScreen('dependency');
-  };
-
-  const inspectSource = async (value: string): Promise<void> => {
+  const loadExternalVolumes = async (): Promise<void> => {
     try {
       setError(undefined);
-      const result = await inventoryTakeout(value.trim());
+      setErrorAction(undefined);
+      const volumes = await listSelectableExternalVolumes();
+      setExternalVolumes(volumes);
+      setScreen(volumes.length > 0 ? 'select-volume' : 'no-external-volume');
+    } catch (failure) {
+      setError(failureMessage(failure));
+      setErrorAction('Connect an external volume and try again, or return to the menu.');
+    }
+  };
+
+  const inspectGuidedSource = async (value: string): Promise<void> => {
+    try {
+      setError(undefined);
+      setErrorAction(undefined);
+      const trimmed = value.trim();
+      const result = await inventoryTakeout(trimmed);
       if (result.inventory.archives === 0) throw new Error('No ZIP archives were found in the selected path.');
       if (result.media.length === 0) throw new Error('No supported photos or videos were found in the ZIP archives.');
-      setSourcePath(path.resolve(value.trim()));
+      setSourcePath(path.resolve(trimmed));
       setInventory(result.inventory);
-      setCandidates(result.media);
-      await loadExternalVolumesAfterInventory();
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+      await loadExternalVolumes();
+    } catch (failure) {
+      setError(failureMessage(failure));
+      setErrorAction('Check the source path and confirm it contains Google Takeout ZIP archives, then try again.');
+    }
   };
 
   const selectVolume = async (volume: ExternalVolume): Promise<void> => {
-    try {
-      if (!inventory) return;
-      setError(undefined);
-      if (volume.filesystem === 'apfs' && volume.availableBytes >= requiredBytes(inventory)) {
-        await validateExternalApfs(volume.mountPoint, requiredBytes(inventory));
-        setVolumePath(volume.mountPoint);
-        await continueAfterStorage();
-        return;
-      }
-      const disk = await externalWholeDiskForVolume(volume.mountPoint);
-      if (disk.capacityBytes < requiredBytes(inventory)) throw new Error(`The selected disk capacity is below the required migration space of ${formatBytes(requiredBytes(inventory))}.`);
-      setSelectedDisk(disk);
-      setScreen('volume-name');
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-  };
-
-  const loadExternalVolumes = async (): Promise<void> => {
-    try {
-      if (!inventory) return;
-      setError(undefined);
-      const volumes = await listSelectableExternalVolumes();
-      setExternalVolumes(volumes);
-      setScreen(volumes.length > 0 ? 'select-volume' : 'no-external-volume');
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-  };
-
-  const loadExternalVolumesAfterInventory = async (): Promise<void> => {
+    if (!inventory) return;
     try {
       setError(undefined);
-      const volumes = await listSelectableExternalVolumes();
-      setExternalVolumes(volumes);
-      setScreen(volumes.length > 0 ? 'select-volume' : 'no-external-volume');
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-  };
-
-  const loadExternalDisks = async (): Promise<void> => {
-    try {
-      setError(undefined);
-      const disks = await listExternalWholeDisks();
-      setExternalDisks(disks);
-      setScreen(disks.length > 0 ? 'select-disk' : 'no-external-volume');
-    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-  };
-
-  const prepareVolume = async (): Promise<void> => {
-    if (!selectedDisk || !inventory) return;
-    try {
-      setError(undefined);
-      setScreen('formatting');
-      const mountPath = volumeMountPath(volumeName);
-      await eraseExternalDisk(selectedDisk.deviceIdentifier, volumeName.trim());
-      await validateExternalApfs(mountPath, requiredBytes(inventory));
-      setVolumePath(mountPath);
-      await continueAfterStorage();
+      setErrorAction(undefined);
+      await checkBundleVolume(volume.mountPoint, requiredBundleBytes(inventory));
+      setVolumePath(volume.mountPoint);
+      setScreen('confirm');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-      setScreen('erase-confirmation');
+      setError(failureMessage(failure));
+      setErrorAction('Select a different destination volume with enough free, writable space.');
     }
   };
 
-  const installDependency = async (): Promise<void> => {
+  const startPreparation = async (): Promise<void> => {
     try {
       setError(undefined);
-      setScreen('installing-dependency');
-      await installExifTool();
-      if (!await exifToolAvailable()) throw new Error('ExifTool installation completed but the command is not available. Restart the terminal and resume guided migration.');
-      setScreen('library');
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-      setScreen('dependency');
-    }
-  };
-
-  const startMigration = async (): Promise<void> => {
-    try {
-      setScreen('running');
-      const paths = await initializePaths(volumePath);
-      await openPhotosLibrary(paths.libraryPath);
-      await importCandidates(paths, candidates, setProgress);
+      setErrorAction(undefined);
+      setScreen('preparing');
+      const result = await prepareBundle(volumePath, sourcePath, setProgress);
+      setProgress(result);
+      const currentManifest = await getBundleStatus(volumePath);
+      setManifest(currentManifest);
       setScreen('complete');
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
-      setScreen('confirm');
+      setError(failureMessage(failure));
+      setErrorAction('Use the original Takeout source to resume, or remove .gfotos-migrator/ on the volume to start fresh, then try again.');
+      setScreen('select-volume');
     }
   };
 
-  useEffect(() => {
-    if (screen !== 'library') return;
-    const interval = setInterval(async () => setLibraryReady(await exists(path.join(volumePath, 'GoogleTakeoutMigration.photoslibrary'))), 1000);
-    return () => clearInterval(interval);
-  }, [screen, volumePath]);
+  // Tools > Inspect Takeout
+  const runToolsInspectSource = async (value: string): Promise<void> => {
+    try {
+      setError(undefined);
+      setErrorAction(undefined);
+      const trimmed = value.trim();
+      const {inventory: sourceInventory} = await inventoryTakeout(trimmed);
+      setInspectSourcePath(path.resolve(trimmed));
+      setInspectInventory(sourceInventory);
+      setScreen('tools-inspect-volume');
+    } catch (failure) {
+      setError(failureMessage(failure));
+      setErrorAction('Check the source path and confirm it contains Google Takeout ZIP archives, then try again.');
+    }
+  };
+
+  const runToolsInspectVolume = async (value: string): Promise<void> => {
+    if (!inspectInventory) return;
+    const trimmed = value.trim();
+    const required = requiredBundleBytes(inspectInventory);
+    let volumeInfo: BundleVolumeInfo | undefined;
+    let volumeError: string | undefined;
+    if (trimmed) {
+      try {
+        volumeInfo = await checkBundleVolume(trimmed, required);
+      } catch (failure) {
+        volumeError = failureMessage(failure);
+      }
+    }
+    setInspectResult({source: inspectSourcePath, inventory: inspectInventory, requiredBytes: required, volumeInfo, volumeError});
+    setScreen('tools-inspect-result');
+  };
+
+  // Tools > Status
+  const runToolsStatus = async (value: string): Promise<void> => {
+    try {
+      setError(undefined);
+      setErrorAction(undefined);
+      const result = await getBundleStatus(path.resolve(value.trim()));
+      setStatusManifest(result);
+      setScreen('tools-status-result');
+    } catch (failure) {
+      setError(failureMessage(failure));
+      setErrorAction('Run prepare on this volume first, or confirm the path points to a prepared Import Bundle volume.');
+    }
+  };
+
+  // Tools > Report
+  const runToolsReport = async (value: string): Promise<void> => {
+    try {
+      setError(undefined);
+      setErrorAction(undefined);
+      const destination = await writeBundleReport(path.resolve(value.trim()));
+      setReportPath(destination);
+      setScreen('tools-report-result');
+    } catch (failure) {
+      setError(failureMessage(failure));
+      setErrorAction('Run prepare on this volume first, or confirm the path points to a prepared Import Bundle volume.');
+    }
+  };
 
   return <Box flexDirection="column" padding={1} gap={1}>
     <Banner/>
     {error && <Alert variant="error">{error}</Alert>}
+    {errorAction && <Text color="yellow">{errorAction}</Text>}
     {screen === 'checking-update' && <Spinner label="Checking for updates..."/>}
     {screen === 'update-available' && availableUpdate && <><StatusMessage variant="info">{`Version ${availableUpdate.version} is available.`}</StatusMessage><Text>{`Update from ${VERSION} now?`}</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void applyUpdate()} onCancel={() => setScreen('menu')}/></>}
     {screen === 'updating' && <Spinner label="Downloading and installing the update..."/>}
     {screen === 'update-complete' && <><StatusMessage variant="success">Update installed successfully.</StatusMessage><Text>Restart gfotos-migrator to use the new version.</Text><ConfirmInput defaultChoice="confirm" onConfirm={() => process.exit(0)} onCancel={() => process.exit(0)}/></>}
+
     {screen === 'menu' && <>
-      <Text>Safe Google Takeout migration to an isolated Photos library.</Text>
-      <Select options={[{label: 'Start guided migration', value: 'start'}, {label: 'Exit', value: 'exit'}]} onChange={value => {
+      <Text>Prepares a Google Takeout Import Bundle on a destination volume of your choice.</Text>
+      <Text dimColor>No Photos automation, iCloud change, or disk formatting is performed.</Text>
+      <Select options={[
+        {label: 'Start guided migration', value: 'start'},
+        {label: 'Tools', value: 'tools'}
+      ]} onChange={value => {
+        setError(undefined);
+        setErrorAction(undefined);
         if (value === 'start') setScreen('source');
-        else process.exit(0);
+        else setScreen('tools');
       }}/>
     </>}
-    {screen === 'source' && <><Text>Enter the folder containing Google Takeout ZIP archives:</Text><TextInput placeholder="/Volumes/External/Takeout" onSubmit={inspectSource}/></>}
-    {screen === 'storage' && inventory && <>
-      <Text>{`${inventory.images} photos, ${inventory.videos} videos, ${inventory.archives} ZIP archives.`}</Text>
-      <Text>{`Required external free space: ${formatBytes(requiredBytes(inventory))}.`}</Text>
-      <Text bold>Migration storage must be an external APFS volume. Other external formats can be converted after explicit confirmation.</Text>
+
+    {screen === 'tools' && <>
+      <Text bold>Tools</Text>
       <Select options={[
-        {label: 'Prepare an external disk now (erases that disk)', value: 'prepare'},
-        {label: 'Select an external volume', value: 'existing'},
-        {label: 'Cancel migration', value: 'cancel'}
+        {label: 'Inspect Takeout', value: 'inspect'},
+        {label: 'Prepare or resume Import Bundle', value: 'prepare'},
+        {label: 'Status', value: 'status'},
+        {label: 'Report', value: 'report'},
+        {label: 'Back', value: 'back'}
       ]} onChange={value => {
-        if (value === 'prepare') void loadExternalDisks();
-        else if (value === 'existing') void loadExternalVolumes();
+        setError(undefined);
+        setErrorAction(undefined);
+        if (value === 'inspect') setScreen('tools-inspect-source');
+        else if (value === 'prepare') setScreen('source');
+        else if (value === 'status') setScreen('tools-status-volume');
+        else if (value === 'report') setScreen('tools-report-volume');
         else setScreen('menu');
       }}/>
     </>}
-    {screen === 'select-volume' && <>
-      <Text bold>Select the external volume for the isolated migration library.</Text>
-      <Text dimColor>System volumes, Time Machine destinations, and read-only volumes are excluded. Non-APFS volumes will be erased and converted to APFS after confirmation.</Text>
+
+    {screen === 'source' && <>
+      <Text>Enter the folder containing Google Takeout ZIP archives:</Text>
+      <TextInput placeholder="/Volumes/External/Takeout" onSubmit={value => void inspectGuidedSource(value)}/>
+    </>}
+
+    {screen === 'select-volume' && inventory && <>
+      <Text bold>Select the destination volume for the Import Bundle.</Text>
+      <Text dimColor>{`Required free space: ${formatBytes(requiredBundleBytes(inventory))}. System volumes, Time Machine destinations, and read-only volumes are excluded. Any writable filesystem is accepted.`}</Text>
       <Select visibleOptionCount={10} options={[
         ...externalVolumes.map(volume => ({label: `${volume.name} — ${volume.filesystem || 'unknown'} — ${formatBytes(volume.availableBytes)} free of ${formatBytes(volume.capacityBytes)}`, value: volume.mountPoint})),
-        {label: 'Format a disk for migration (erases all data)', value: 'format-disk'},
         {label: 'Cancel migration', value: 'cancel'}
       ]} onChange={value => {
-        if (value === 'format-disk') void loadExternalDisks();
-        else if (value === 'cancel') setScreen('menu');
+        if (value === 'cancel') setScreen('menu');
         else {
           const volume = externalVolumes.find(candidate => candidate.mountPoint === value);
           if (volume) void selectVolume(volume);
         }
       }}/>
     </>}
+
     {screen === 'no-external-volume' && <>
       <StatusMessage variant="warning">No selectable external storage was found.</StatusMessage>
-      <Text>You can format an external disk now or connect an existing APFS volume.</Text>
+      <Text>Connect a writable external volume with enough free space and try again.</Text>
       <Select options={[
-        {label: 'Format an external disk (erases all data)', value: 'format'},
+        {label: 'Retry', value: 'retry'},
         {label: 'Cancel migration', value: 'cancel'}
       ]} onChange={value => {
-        if (value === 'format') void loadExternalDisks();
+        if (value === 'retry') void loadExternalVolumes();
         else setScreen('menu');
       }}/>
     </>}
-    {screen === 'select-disk' && <>
-      <Text bold>Select the external physical disk to erase and format as APFS.</Text>
-      <Text color="red">All data on the selected disk will be permanently erased.</Text>
-      {externalDisks.length > 0 ? <Select visibleOptionCount={10} options={[
-        ...externalDisks.map(disk => ({label: `${disk.deviceIdentifier} — ${disk.name} — ${formatBytes(disk.capacityBytes)}`, value: disk.deviceIdentifier})),
-        {label: 'Back', value: 'back'},
-        {label: 'Cancel migration', value: 'cancel'}
-      ]} onChange={value => {
-        const backScreen = externalVolumes.length > 0 ? 'select-volume' : 'no-external-volume';
-        if (value === 'back') setScreen(backScreen);
-        else if (value === 'cancel') setScreen('menu');
-        else {
-          const disk = externalDisks.find(candidate => candidate.deviceIdentifier === value);
-          if (!disk || !inventory) return;
-          if (disk.capacityBytes < requiredBytes(inventory)) {
-            setError(`The selected disk capacity is below the required migration space of ${formatBytes(requiredBytes(inventory))}.`);
-            return;
-          }
-          setSelectedDisk(disk);
-          setScreen('volume-name');
-        }
-      }}/> : <>
-        <StatusMessage variant="warning">No eligible external physical disks were found.</StatusMessage>
-        <Text>Connect an external disk and try again.</Text>
-        <Select options={[
-          {label: 'Back', value: 'back'},
-          {label: 'Cancel migration', value: 'cancel'}
-        ]} onChange={value => {
-          const backScreen = externalVolumes.length > 0 ? 'select-volume' : 'no-external-volume';
-          if (value === 'back') setScreen(backScreen);
-          else setScreen('menu');
-        }}/>
-      </>}
+
+    {screen === 'confirm' && inventory && <>
+      <StatusMessage variant="info">No Photos automation or iCloud change will be performed.</StatusMessage>
+      <Text>{`Prepare an Import Bundle for ${inventory.images} photos and ${inventory.videos} videos on:`}</Text>
+      <Text color="yellow">{volumePath}</Text>
+      <ConfirmInput defaultChoice="cancel" onConfirm={() => void startPreparation()} onCancel={() => setScreen('select-volume')}/>
     </>}
-    {screen === 'volume-name' && <><Text>{`Descriptive APFS volume name for ${selectedDisk?.deviceIdentifier ?? 'the selected disk'}:`}</Text><Text dimColor>Example: GPhotos_Export. This name identifies the disk as Google Photos migration storage.</Text><TextInput defaultValue={volumeName} onSubmit={value => {
-      try { volumeMountPath(value); setVolumeName(value.trim()); setScreen('erase-confirmation'); } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
-    }}/></>}
-    {screen === 'erase-confirmation' && <>
-      <Text color="red" bold>{`Last warning: every partition on ${selectedDisk?.deviceIdentifier} (${selectedDisk?.name}) will be erased permanently.`}</Text>
-      <Text>{`Type ${selectedDisk?.deviceIdentifier} exactly to create the APFS volume “${volumeName}”: `}</Text>
-      <TextInput onSubmit={value => {
-        if (value.trim() !== selectedDisk?.deviceIdentifier) { setError('The disk identifier did not match. No disk was changed.'); return; }
-        void prepareVolume();
-      }}/>
+
+    {screen === 'preparing' && <>
+      <Spinner label="Preparing the Import Bundle..."/>
+      <ProgressBar value={progress ? (progress.completed / Math.max(progress.total, 1)) * 100 : 0}/>
+      <Text>{progress ? `${progress.completed}/${progress.total} processed · ${progress.materialized} materialized · ${progress.duplicate} duplicate · ${progress.failed} failed` : 'Starting...'}</Text>
+      {progress?.current && <Text dimColor>{progress.current}</Text>}
     </>}
-    {screen === 'formatting' && <Spinner label="Erasing the selected disk and creating the APFS migration volume..."/>}
-    {screen === 'dependency' && <><StatusMessage variant="warning">ExifTool is required to restore Google Takeout capture dates.</StatusMessage><Text>Install ExifTool now with Homebrew? This does not modify your photos or migration disk.</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void installDependency()} onCancel={() => setScreen('menu')}/></>}
-    {screen === 'installing-dependency' && <Spinner label="Installing ExifTool with Homebrew..."/>}
-    {screen === 'library' && <>
-      <Text bold>Create the isolated library in Photos now.</Text>
-      <Text>Quit Photos, hold Option while opening it, select Create New, and use:</Text>
-      <Text color="yellow">{path.join(volumePath, 'GoogleTakeoutMigration.photoslibrary')}</Text>
-      <Text>Do not make it the System Photo Library and do not enable iCloud Photos.</Text>
-      {libraryReady ? <ConfirmInput onConfirm={() => setScreen('confirm')} onCancel={() => setScreen('menu')}/> : <Spinner label="Waiting for the new library to appear..."/>}
+
+    {screen === 'complete' && progress && <>
+      <StatusMessage variant="success">Import Bundle prepared.</StatusMessage>
+      <Text>{`Source: ${sourcePath}`}</Text>
+      <Text>{`Import path: ${path.join(volumePath, 'import')}`}</Text>
+      <Text>{`Materialized: ${progress.materialized} · Duplicate: ${progress.duplicate} · Failed: ${progress.failed} · Skipped: ${progress.skipped}`}</Text>
+      {manifest && <Text>{`Missing sidecar metadata: ${manifest.counts.missingSidecar}`}</Text>}
+      <Text bold color="yellow">{`Next step: open Photos and manually import the files in ${path.join(volumePath, 'import')}. This tool does not automate Photos import.`}</Text>
+      <Select options={[{label: 'Back to menu', value: 'menu'}]} onChange={() => setScreen('menu')}/>
     </>}
-    {screen === 'confirm' && inventory && <><StatusMessage variant="info">The main Photos library and iCloud will not be modified.</StatusMessage><Text>{`Import ${inventory.images} photos and ${inventory.videos} videos into the isolated library?`}</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void startMigration()} onCancel={() => setScreen('menu')}/></>}
-    {screen === 'running' && <><Spinner label="Importing into the open isolated Photos library..."/><ProgressBar value={progress ? (progress.completed / Math.max(progress.total, 1)) * 100 : 0}/><Text>{progress ? `${progress.completed}/${progress.total} processed · ${progress.imported} imported · ${progress.skipped} skipped · ${progress.failed} failed` : 'Preparing...'}</Text>{progress?.current && <Text dimColor>{progress.current.entryPath}</Text>}</>}
-    {screen === 'complete' && <><StatusMessage variant="success">Migration completed. Review the isolated library before using handoff-check.</StatusMessage><Text>{`Source: ${sourcePath}`}</Text><Text>{`Library: ${path.join(volumePath, 'GoogleTakeoutMigration.photoslibrary')}`}</Text></>}
+
+    {screen === 'tools-inspect-source' && <>
+      <Text>Enter the folder containing Google Takeout ZIP archives:</Text>
+      <TextInput placeholder="/Volumes/External/Takeout" onSubmit={value => void runToolsInspectSource(value)}/>
+    </>}
+
+    {screen === 'tools-inspect-volume' && <>
+      <Text>Enter a destination volume to validate capacity, or press Enter to skip:</Text>
+      <TextInput placeholder="(optional) /Volumes/External" onSubmit={value => void runToolsInspectVolume(value)}/>
+    </>}
+
+    {screen === 'tools-inspect-result' && inspectResult && <>
+      <StatusMessage variant="info">Takeout inspection result</StatusMessage>
+      <Text>{`Source: ${inspectResult.source}`}</Text>
+      <Text>{`Archives: ${inspectResult.inventory.archives} · Photos: ${inspectResult.inventory.images} · Videos: ${inspectResult.inventory.videos}`}</Text>
+      <Text>{`Required free space: ${formatBytes(inspectResult.requiredBytes)}`}</Text>
+      {inspectResult.volumeInfo && <Text color="green">{`Destination is writable with ${formatBytes(inspectResult.volumeInfo.availableBytes)} available.`}</Text>}
+      {inspectResult.volumeError && <Text color="red">{inspectResult.volumeError}</Text>}
+      <Select options={[{label: 'Back to Tools', value: 'tools'}, {label: 'Back to menu', value: 'menu'}]} onChange={value => setScreen(value === 'tools' ? 'tools' : 'menu')}/>
+    </>}
+
+    {screen === 'tools-status-volume' && <>
+      <Text>Enter the destination volume to inspect:</Text>
+      <TextInput placeholder="/Volumes/External" onSubmit={value => void runToolsStatus(value)}/>
+    </>}
+
+    {screen === 'tools-status-result' && statusManifest && <>
+      <StatusMessage variant="info">Import Bundle status</StatusMessage>
+      <Text>{`Created: ${statusManifest.createdAt} · Updated: ${statusManifest.updatedAt}`}</Text>
+      <Text>{`Total: ${statusManifest.counts.total} · Materialized: ${statusManifest.counts.materialized} · Duplicate: ${statusManifest.counts.duplicate}`}</Text>
+      <Text>{`Failed: ${statusManifest.counts.failed} · Skipped: ${statusManifest.counts.skipped} · Pending: ${statusManifest.counts.pending}`}</Text>
+      <Text>{`Missing sidecar metadata: ${statusManifest.counts.missingSidecar}`}</Text>
+      <Select options={[{label: 'Back to Tools', value: 'tools'}, {label: 'Back to menu', value: 'menu'}]} onChange={value => setScreen(value === 'tools' ? 'tools' : 'menu')}/>
+    </>}
+
+    {screen === 'tools-report-volume' && <>
+      <Text>Enter the destination volume to write a report for:</Text>
+      <TextInput placeholder="/Volumes/External" onSubmit={value => void runToolsReport(value)}/>
+    </>}
+
+    {screen === 'tools-report-result' && reportPath && <>
+      <StatusMessage variant="success">Report written.</StatusMessage>
+      <Text>{reportPath}</Text>
+      <Select options={[{label: 'Back to Tools', value: 'tools'}, {label: 'Back to menu', value: 'menu'}]} onChange={value => setScreen(value === 'tools' ? 'tools' : 'menu')}/>
+    </>}
   </Box>;
 }
 

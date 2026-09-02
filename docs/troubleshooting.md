@@ -24,37 +24,29 @@ which -a gfotos-migrator
 gfotos-migrator --version
 ```
 
-## ExifTool is missing
-
-Install it with `brew install exiftool`, then rerun `gfotos-migrator doctor`.
-
 ## The selected volume is rejected
 
-The migration requires external APFS storage. The selected path may be internal, formatted as a non-APFS filesystem, mounted read-only, or have insufficient free capacity.
+`prepare`/`resume`/`inspect --volume` require the destination path to exist, be a directory, be writable, and have enough free space (uncompressed Takeout media size plus 20 percent headroom). Any writable filesystem is accepted — there is no APFS requirement. Confirm the path is mounted and not read-only, and free up space or choose a larger destination if capacity is reported as insufficient.
 
-## No eligible external volume is listed
+## No eligible external volume is listed in guided migration
 
-Connect a mounted external volume and restart guided migration. System volumes, configured Time Machine destinations, and read-only volumes are intentionally excluded. Non-APFS volumes can be selected, but converting one to APFS erases its entire external physical disk after exact identifier confirmation. Use the descriptive `GPhotos_Export` default name, or choose another clear migration-specific name, so the disk remains identifiable after formatting.
+Connect a mounted, writable external volume and restart guided migration. System volumes, configured Time Machine destinations, and read-only volumes are intentionally excluded from the interactive list. You can also pass any writable directory path directly to `prepare`/`resume`/`inspect --volume` from the command line without using the interactive volume picker.
 
-## Photos import is denied
+## A file failed to prepare
 
-Open System Settings, review Privacy & Security > Automation, and allow the terminal application to control Photos. Confirm that the isolated library, not the main library, is open before retrying.
-
-## A video failed to import
-
-Google Takeout can contain containers or codecs not supported by the installed version of Photos. The report preserves the failing archive entry. Do not transcode originals in place; use a separate, documented conversion workflow if required.
+Preparation extracts and hashes each Takeout entry independently, so a single unreadable or unsupported entry does not stop the rest of the bundle. `report` preserves the failing archive entry and error message. Do not transcode or otherwise modify originals in the Takeout source; investigate the specific archive entry separately if required.
 
 ## A ZIP is rejected
 
-The importer rejects unsafe paths, archives with too many entries, and oversized entries. This is intentional protection against path traversal and ZIP bombs.
+The bundle engine rejects unsafe paths, archives with too many entries, and oversized entries. This is intentional protection against path traversal and ZIP bombs.
 
-## Migration was interrupted
+## Preparation was interrupted
 
-Run `status` and `report`. Imported items are skipped on a subsequent import because the database recognizes their SHA-256 hash. Unknown items require manual review to avoid duplicates.
+Run `status` and `report` against the destination volume. `prepare`/`resume` are idempotent: items already materialized, duplicated, or skipped are recognized by their SHA-256 hash and are not reprocessed. Only pending and previously failed items are retried on the next run.
 
 ## Update check or installation fails
 
-The update check is optional and does not affect migration. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset, then launch guided migration again.
+The update check is optional and does not affect bundle preparation. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset, then launch guided migration again.
 
 ## Installer reports a version mismatch after upgrade
 

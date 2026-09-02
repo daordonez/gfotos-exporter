@@ -2,9 +2,9 @@
 
 ## Project purpose
 
-`gfotos-migrator` is a local TypeScript and Ink CLI that migrates Google Photos Takeout ZIP archives into an isolated macOS Photos library on an external APFS volume. It supports photos and videos, preserves migration state in SQLite, and provides a deliberate manual handoff to the user's main Photos library.
+`gfotos-migrator` is a local TypeScript and Ink CLI that prepares a Google Photos Takeout export as a portable **Import Bundle**: a flat `import/` directory of deduplicated original photos and videos plus a `.gfotos-migrator/` state directory (SQLite state, extracted sidecar metadata, manifest, and reports) on any writable destination volume. It supports photos and videos, preserves bundle state and provenance in SQLite, and leaves the final import into Photos (or any other tool) as a deliberate manual step.
 
-The primary requirement is safety: the migration workflow must never modify the main Photos library or enable iCloud Photos for the isolated library.
+The primary requirement is safety: bundle preparation must never modify Takeout inputs, never touch Photos or iCloud, and never perform destructive disk operations. `guided-migration` remains the complete, stable end-to-end assistant for this workflow.
 
 ## Language and code standards
 
@@ -15,14 +15,13 @@ The primary requirement is safety: the migration workflow must never modify the 
 
 ## Repository map
 
-- `src/cli.tsx`: command dispatch and non-interactive commands.
-- `src/tui.tsx`: guided interactive migration workflow.
+- `src/cli.tsx`: command dispatch and non-interactive commands (`guided-migration`, `inspect`, `prepare`, `resume`, `status`, `report`).
+- `src/tui.tsx`: guided interactive Import Bundle workflow, including the root menu and Tools submenu.
 - `src/takeout.ts`: ZIP inventory, safe extraction, and Google Takeout sidecar handling.
-- `src/media.ts`: media metadata normalization and ExifTool integration.
-- `src/migration.ts`: migration paths, hashes, import orchestration, and reporting inputs.
-- `src/database.ts`: SQLite migration state.
-- `src/photos.ts`: Apple Photos automation.
-- `src/volume.ts`: APFS, capacity, and external disk validation.
+- `src/bundle.ts`: bundle paths, volume writability/capacity checks, manifest handling, and bundle preparation orchestration.
+- `src/bundle-database.ts`: SQLite Import Bundle item state.
+- `src/domain.ts`: shared domain types (media candidates, bundle paths/items/manifest, Takeout inventory).
+- `src/volume.ts`: external volume discovery and inspection (filesystem-agnostic; no APFS or disk-erase requirement).
 - `docs/operations.md`: operator workflow and recovery.
 - `docs/troubleshooting.md`: known failures and operator actions.
 - `test/core.test.mjs`: native Node test suite.
@@ -30,15 +29,12 @@ The primary requirement is safety: the migration workflow must never modify the 
 ## Safety invariants
 
 - Treat Google Takeout archives and extracted originals as read-only input. Never alter originals in place.
-- Import only into `GoogleTakeoutMigration.photoslibrary` on the selected external APFS volume.
-- Never set the isolated library as the System Photo Library and never enable iCloud Photos in it.
-- Do not automate imports into, deletion of, or configuration changes to the user's main Photos library.
-- Keep the manual handoff explicit: it happens only after `handoff-check` and user review in Photos.
-- Preserve SQLite state for imported, failed, skipped, and unknown items. Do not automatically retry `unknown` items because Photos may have accepted them before an interruption.
-- Preserve SHA-256 deduplication unless a migration and recovery strategy is changed together.
+- `import/` must stay flat and contain only final media files; tool-created state lives only under `.gfotos-migrator/`.
+- Do not automate opening, importing into, or configuring Photos, and do not request macOS Automation permission. The manual import into Photos (or any tool) happens only after the operator reviews the completed bundle.
+- Preserve SQLite bundle state and provenance (source archive, entry, SHA-256, final path, state) for materialized, duplicate, failed, skipped, and pending items.
+- Preserve SHA-256 deduplication unless a bundle contract and recovery strategy is changed together.
 - ZIP handling must remain resistant to path traversal and ZIP bombs. Do not buffer complete video files in memory.
-- `prepare-volume` is destructive. It must accept only an external whole-disk identifier and require an exact, explicit confirmation of that identifier before invoking `diskutil eraseDisk`.
-- `cleanup` must require the exact isolated-library confirmation and must never accept a broad path or the main library.
+- Do not reintroduce APFS-only validation or destructive disk formatting/erasure in the bundle preparation path; accept any writable destination with sufficient free capacity.
 
 ## Change requirements
 
@@ -47,6 +43,7 @@ The primary requirement is safety: the migration workflow must never modify the 
 - Update `docs/troubleshooting.md` when a new failure mode has a known operator action.
 - Add or update focused tests for changes to parsing, validation, state transitions, destructive-operation guards, and recovery behavior.
 - Do not claim macOS Photos, iCloud, disk erasure, or external-device behavior has been verified unless it was actually tested on a suitable machine and volume.
+- Do not claim a manual Photos import or a real Takeout dataset was verified unless it was actually performed.
 
 ## Validation
 

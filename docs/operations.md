@@ -2,34 +2,21 @@
 
 ## Prepare storage
 
-Use a dedicated external disk. Do not use a Time Machine destination. Guided migration inventories the Takeout first, then automatically discovers and lists available external volumes for selection. The list shows each volume's name, filesystem, available space, and total capacity. System volumes, Time Machine destinations, and read-only volumes are excluded. SD cards inserted in built-in card readers are included even though macOS may report them as `Internal`; the tool uses `RemovableMediaOrExternalDevice` to identify eligible storage. APFS volumes with sufficient free space are used immediately without formatting. A non-APFS volume, or an APFS volume without enough space, requires erasing its entire external physical disk and converting it to APFS; the exact disk identifier must be typed before any change. Erase operations require the target disk to be whole, physical, and removable-or-external — this prevents accidental erasure of the internal system disk or virtual disk images. The default descriptive APFS volume name is `GPhotos_Export`, which can be changed before formatting. If no selectable volume is connected, guided migration offers the option to format an external disk or cancel the migration.
+Choose any writable destination volume with enough free capacity — an external drive, a secondary internal volume, or a local directory. Guided migration inventories the Takeout source first, then discovers and lists available external volumes for selection when run interactively. The list shows each volume's name, filesystem, available space, and total capacity. System volumes, Time Machine destinations, and read-only volumes are excluded from the interactive list, but any writable filesystem is accepted — there is no APFS requirement and no disk formatting or erasure step. `inspect` and `prepare`/`resume` validate that the selected destination is writable and has enough free space (uncompressed Takeout media size plus 20 percent headroom) before writing anything.
 
-Keep the isolated Photos library, the migration database, reports, and temporary extraction directory on this volume. The tool requires enough free space for the uncompressed Takeout media plus 20 percent headroom.
+The Import Bundle is written under the destination volume root: a flat `import/` directory containing deduplicated original photos and videos, and a `.gfotos-migrator/` directory holding the manifest, SQLite state, extracted sidecar metadata, and reports. No other top-level entries are created.
 
-The `prepare-volume` command remains available as an advanced option for scripted workflows that need to format a disk outside the guided migration flow.
+## Manual Photos import
 
-## Create the isolated library
-
-1. Quit Photos.
-2. Hold Option while opening Photos.
-3. Select **Create New**.
-4. Save the library as `GoogleTakeoutMigration.photoslibrary` in the selected external volume.
-5. Do not select **Use as System Photo Library**.
-6. Do not enable iCloud Photos in this library.
-
-The guided migration waits for this library before it starts importing.
-
-## Permissions
-
-Guided migration checks ExifTool and offers to install it through Homebrew when it is missing. The first Photos import triggers a macOS Automation permission request for the terminal application. Approve it only after verifying the isolated library is open. If macOS blocks protected-library inspection, grant Full Disk Access to the terminal application in Privacy & Security and rerun `doctor`.
+`gfotos-migrator` does not automate importing files into Photos and does not request macOS Automation permission. After `prepare`/`resume` completes (or the guided workflow reaches its completion screen), open Photos manually, choose **File > Import**, and select the files under the reported `import/` path. Review the import before completing it. The tool never modifies the main Photos library or enables iCloud Photos automatically because it never touches Photos at all.
 
 ## Updates
 
-Each guided migration launch checks GitHub Releases for a newer stable package before showing the main menu. The check has a short timeout and failures do not block migration. When an update is available, the operator can accept it to download the exact matching release package and install it with `npm` globally using the prefix that owns the resolved executable, then restart the command. Rejecting the prompt makes no change.
+Each guided migration launch checks GitHub Releases for a newer stable package before showing the main menu. The check has a short timeout and failures do not block bundle preparation. When an update is available, the operator can accept it to download the exact matching release package and install it with `npm` globally using the prefix that owns the resolved executable, then restart the command. Rejecting the prompt makes no change.
 
 Published releases are public. The update check and package download do not require a GitHub account, GitHub CLI, or a token.
 
-After installation the update is verified: the newly installed package manifest is read to confirm the version, and the active executable is run with `--version` to confirm that no stale binary is shadowing the new one. If either check fails, the installation is reported as failed and migration continues without updating.
+After installation the update is verified: the newly installed package manifest is read to confirm the version, and the active executable is run with `--version` to confirm that no stale binary is shadowing the new one. If either check fails, the installation is reported as failed and the tool continues without updating.
 
 ## Upgrade compatibility matrix
 
@@ -58,12 +45,6 @@ The installer selects the latest published release, removes any previous install
 
 ## Recovery
 
-Run `status` to inspect imported, failed, skipped, and unknown items. Failed items remain in SQLite with their error. Unknown items are intentionally not re-imported automatically because Photos may have accepted them before a process interruption.
+Run `status --volume <destination-volume>` to inspect the bundle manifest: total, materialized, duplicate, failed, skipped, pending, and missing-sidecar counts. Run `report --volume <destination-volume>` to write a Markdown result summary under `.gfotos-migrator/reports` on the destination volume, including per-item state and error detail.
 
-Run `report` to write a Markdown result summary under `.gfotos-migrator/reports` on the external volume.
-
-## Handoff
-
-Run `handoff-check` before touching the main library. It blocks when the volume containing the main library lacks enough currently free storage for the isolated library size. iCloud optimization is not treated as available immediate capacity.
-
-Open the main library manually, choose **File > Import**, select the isolated Photos library, review the presented items, and choose **Import All New Items** only after verification. Do not delete the isolated library until the main library and iCloud have been checked.
+`prepare`/`resume` are idempotent and resumable: rerunning them with the same Takeout source and destination volume skips items already materialized, duplicated, or skipped, and only retries items that previously failed or were never processed. If the manifest is corrupt or was created for a different Takeout source, `prepare`/`resume` fail with guidance to either use the original source to resume or remove `.gfotos-migrator/` on the volume to start fresh.
