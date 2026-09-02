@@ -26,6 +26,12 @@ export interface BundlePaths {
   manifestPath: string;
 }
 
+/** Result of attempting to locate and parse a Takeout sidecar JSON file. */
+export type SidecarStatus = 'present' | 'missing' | 'invalid';
+
+/** Named metadata fields that can be embedded into media via ExifTool. */
+export type MetadataFieldName = 'date' | 'title' | 'description' | 'gps';
+
 export interface BundleItem {
   hash: string;
   archiveName: string;
@@ -33,9 +39,30 @@ export interface BundleItem {
   mediaKind: MediaKind;
   state: BundleItemState;
   hasSidecar: boolean;
+  /** Whether the sidecar JSON (if any) was found and parsed successfully. */
+  sidecarStatus: SidecarStatus;
+  /** True when at least one metadata field was written into the materialized file via ExifTool. */
+  metadataApplied: boolean;
+  /** True when this hash has divergent sidecar values across duplicate copies. */
+  metadataConflict: boolean;
+  /** Fields successfully embedded into the media file. */
+  appliedFields?: MetadataFieldName[];
+  /** Fields present in the sidecar but not embeddable for this file's kind/format. */
+  unsupportedFields?: MetadataFieldName[];
   finalPath?: string;
   canonicalHash?: string;
   error?: string;
+}
+
+export interface MetadataConflictEntry {
+  hash: string;
+  field: MetadataFieldName;
+  canonicalArchiveName: string;
+  canonicalEntryPath: string;
+  canonicalValue: string;
+  conflictingArchiveName: string;
+  conflictingEntryPath: string;
+  conflictingValue: string;
 }
 
 export interface BundleManifest {
@@ -51,6 +78,11 @@ export interface BundleManifest {
     skipped: number;
     pending: number;
     missingSidecar: number;
+    metadataApplied: number;
+    metadataPresent: number;
+    metadataMissing: number;
+    metadataInvalid: number;
+    metadataConflicting: number;
   };
 }
 
@@ -66,6 +98,11 @@ export interface TakeoutInventory {
 export interface TakeoutMetadata {
   takenAt?: Date;
   title?: string;
+  description?: string;
+  /** GPS coordinates, preferring Takeout's `geoData` over `geoDataExif` when both are present. */
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
 }
 
 export interface MigrationPaths {

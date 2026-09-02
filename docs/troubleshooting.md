@@ -28,6 +28,14 @@ gfotos-migrator --version
 
 Install it with `brew install exiftool`, then rerun `gfotos-migrator doctor`.
 
+## A bundle item is missing embedded date, title, description, or GPS metadata
+
+Check `bundle-report`: if `sidecarStatus` is `missing` or `invalid` for that item, no Takeout sidecar JSON was found or it could not be parsed — the original file bytes are still preserved and materialized. If `sidecarStatus` is `present` but the field is not in the item's applied-fields list, ExifTool either was not installed at the time `bundle-prepare` ran, or the field is not embeddable for that file's format (for example GPS in a GIF, reported as unsupported). The raw sidecar JSON always remains available under `.gfotos-migrator/sidecars/<hash>.json` for manual recovery regardless of what was embedded.
+
+## A bundle report shows a metadata conflict
+
+Identical media content (same SHA-256 hash) appeared with divergent sidecar values across duplicate copies (for example two different titles). One sidecar is deterministically chosen as canonical and applied to the single materialized file; every conflicting sidecar's raw JSON is preserved separately under `.gfotos-migrator/sidecars/<hash>.conflict-<archive>-<entry>.json`, and the divergent field values are listed in the `bundle-report` Metadata Conflicts table for manual review.
+
 ## The selected volume is rejected
 
 The migration requires external APFS storage. The selected path may be internal, formatted as a non-APFS filesystem, mounted read-only, or have insufficient free capacity.

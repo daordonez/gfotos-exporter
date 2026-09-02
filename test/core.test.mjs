@@ -14,10 +14,25 @@ import {inventoryTakeout} from '../dist/takeout.js';
 import {findAvailableUpdate, resolveExecutablePrefix, verifyInstalledVersion} from '../dist/updates.js';
 import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} from '../dist/volume.js';
 import {BundleDatabase} from '../dist/bundle-database.js';
-import {initializeBundlePaths, safeImportFilename, validateBundleCompatibility, prepareBundle} from '../dist/bundle.js';
+import {initializeBundlePaths, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
+import {parseTakeoutSidecar, readTakeoutMetadata} from '../dist/takeout.js';
+import {applyTakeoutMetadata, exifToolAvailable} from '../dist/media.js';
 
 const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
+
+// A minimal, valid 2x2 baseline JPEG used to exercise real ExifTool writes without adding
+// a binary fixture file or a new project dependency.
+const MINIMAL_JPEG_BASE64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAACAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD50ooor8MP9Uz/2Q==';
+
+async function writeMinimalJpeg(destination) {
+  await writeFile(destination, Buffer.from(MINIMAL_JPEG_BASE64, 'base64'));
+}
+
+const exiftoolReady = await exifToolAvailable();
+if (!exiftoolReady) {
+  console.warn('exiftool is not installed in this environment; skipping ExifTool-dependent metadata tests.');
+}
 
 test('rejects unsafe archive paths', () => {
   assert.equal(isSafeArchivePath('../escape.jpg'), false);
@@ -575,3 +590,345 @@ test('importing bundle-database module does not emit the node:sqlite experimenta
   });
   assert.ok(!(stderr.includes('ExperimentalWarning') && stderr.includes('SQLite')), `Unexpected SQLite warning on stderr: ${stderr}`);
 });
+
+
+// ─── Takeout metadata parsing (sidecar) ────────────────────────────────────
+
+test('parses a full sidecar: date, title, description, and geoData GPS', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-sidecar-full-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, JSON.stringify({
+      title: 'Sunset',
+      description: 'A nice sunset over the bay',
+      photoTakenTime: {timestamp: '1700000000'},
+      geoData: {latitude: 37.4219999, longitude: -122.0862515, altitude: 5.5},
+      geoDataExif: {latitude: 0, longitude: 0, altitude: 0}
+    }));
+    const result = await parseTakeoutSidecar(jsonPath);
+    assert.equal(result.status, 'present');
+    assert.equal(result.metadata.title, 'Sunset');
+    assert.equal(result.metadata.description, 'A nice sunset over the bay');
+    assert.equal(result.metadata.takenAt.getTime(), 1700000000 * 1000);
+    assert.equal(result.metadata.latitude, 37.4219999);
+    assert.equal(result.metadata.longitude, -122.0862515);
+    assert.equal(result.metadata.altitude, 5.5);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('falls back to creationTime when photoTakenTime is absent', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-sidecar-fallback-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, JSON.stringify({creationTime: {timestamp: '1600000000'}}));
+    const result = await parseTakeoutSidecar(jsonPath);
+    assert.equal(result.status, 'present');
+    assert.equal(result.metadata.takenAt.getTime(), 1600000000 * 1000);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('falls back to geoDataExif when geoData is zero', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-sidecar-geo-fallback-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, JSON.stringify({
+      geoData: {latitude: 0, longitude: 0},
+      geoDataExif: {latitude: 51.5, longitude: -0.1}
+    }));
+    const result = await parseTakeoutSidecar(jsonPath);
+    assert.equal(result.status, 'present');
+    assert.equal(result.metadata.latitude, 51.5);
+    assert.equal(result.metadata.longitude, -0.1);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('sidecar status is missing when no path is given or file does not exist', async () => {
+  const noPath = await parseTakeoutSidecar(undefined);
+  assert.equal(noPath.status, 'missing');
+  assert.deepEqual(noPath.metadata, {});
+
+  const missingFile = await parseTakeoutSidecar('/nonexistent/path/does-not-exist.json');
+  assert.equal(missingFile.status, 'missing');
+});
+
+test('sidecar status is invalid for malformed JSON, and readTakeoutMetadata never throws', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-sidecar-invalid-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, '{not valid json');
+    const result = await parseTakeoutSidecar(jsonPath);
+    assert.equal(result.status, 'invalid');
+    assert.deepEqual(result.metadata, {});
+
+    // Back-compat: readTakeoutMetadata callers (e.g. the legacy migration path) must never throw
+    // or discard valid media just because the sidecar is malformed.
+    const legacy = await readTakeoutMetadata(jsonPath);
+    assert.deepEqual(legacy, {});
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('sidecar with a non-object JSON shape is treated as invalid, not present', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-sidecar-shape-'));
+  try {
+    const jsonPath = path.join(directory, 'photo.jpg.json');
+    await writeFile(jsonPath, '"just a string"');
+    const result = await parseTakeoutSidecar(jsonPath);
+    assert.equal(result.status, 'invalid');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// ─── ExifTool metadata application (src/media.ts) ──────────────────────────
+
+test('marks GPS as unsupported for GIF files without invoking ExifTool', async () => {
+  // This test needs no ExifTool binary: applyTakeoutMetadata should recognize the
+  // format cannot carry embedded GPS and skip invoking ExifTool entirely when GPS
+  // is the only field present.
+  const result = await applyTakeoutMetadata('/tmp/whatever-nonexistent.gif', 'image', {latitude: 1, longitude: 2});
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.unsupported, ['gps']);
+});
+
+test('returns empty applied/unsupported and skips ExifTool when there is no metadata to write', async () => {
+  const result = await applyTakeoutMetadata('/tmp/whatever-nonexistent.jpg', 'image', {});
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.unsupported, []);
+});
+
+test('applies date, title, description, and GPS into a real JPEG via ExifTool', {skip: !exiftoolReady}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-exif-apply-'));
+  try {
+    const imagePath = path.join(directory, 'photo.jpg');
+    await writeMinimalJpeg(imagePath);
+    const metadata = {
+      takenAt: new Date('2023-06-15T12:00:00.000Z'),
+      title: 'Vacation',
+      description: 'At the beach',
+      latitude: 40.7128,
+      longitude: -74.006,
+      altitude: 10
+    };
+    const result = await applyTakeoutMetadata(imagePath, 'image', metadata);
+    assert.deepEqual(result.applied.slice().sort(), ['date', 'description', 'gps', 'title'].sort());
+    assert.deepEqual(result.unsupported, []);
+
+    const {stdout} = await execute('/usr/bin/env', ['exiftool', '-json', '-DateTimeOriginal', '-Title', '-Description', '-GPSLatitude', '-GPSLongitude', imagePath]);
+    const [tags] = JSON.parse(stdout);
+    assert.equal(tags.DateTimeOriginal, '2023:06:15 12:00:00');
+    assert.equal(tags.Title, 'Vacation');
+    assert.equal(tags.Description, 'At the beach');
+    assert.ok(tags.GPSLatitude.startsWith('40'), `expected latitude near 40, got ${tags.GPSLatitude}`);
+    assert.ok(tags.GPSLongitude.includes('74'), `expected longitude near 74, got ${tags.GPSLongitude}`);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('applyTakeoutMetadata rejects (non-fatally, for the caller to catch) on an invalid video container', {skip: !exiftoolReady}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-exif-video-'));
+  try {
+    // No real video container is required here: ExifTool will reject the invalid MP4 content.
+    // This asserts the video-specific argument branch is exercised and that ExifTool failures
+    // surface as a rejected promise (callers, e.g. prepareBundle, must treat this as non-fatal).
+    const videoPath = path.join(directory, 'clip.mp4');
+    await writeFile(videoPath, 'not-a-real-video');
+    await assert.rejects(applyTakeoutMetadata(videoPath, 'video', {takenAt: new Date('2023-01-01T00:00:00.000Z')}));
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// ─── Bundle metadata enrichment (src/bundle.ts) ────────────────────────────
+
+test('bundle: materializes an image and enriches it with full sidecar metadata', {skip: !exiftoolReady}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-meta-full-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeMinimalJpeg(path.join(sourceDir, 'photo.jpg'));
+    await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({
+      title: 'Trip',
+      description: 'Mountains',
+      photoTakenTime: {timestamp: '1690000000'},
+      geoData: {latitude: 46.5, longitude: 8.5, altitude: 1200}
+    }));
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1);
+    assert.equal(result.failed, 0);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const database = await BundleDatabase.open(paths.databasePath);
+    try {
+      const items = database.listItems();
+      assert.equal(items.length, 1);
+      const [item] = items;
+      assert.equal(item.state, 'materialized');
+      assert.equal(item.sidecarStatus, 'present');
+      assert.equal(item.metadataApplied, true);
+      assert.ok(item.appliedFields.includes('date'));
+      assert.ok(item.appliedFields.includes('title'));
+      assert.ok(item.appliedFields.includes('description'));
+      assert.ok(item.appliedFields.includes('gps'));
+      assert.equal(item.metadataConflict, false);
+    } finally {
+      database.close();
+    }
+
+    const manifest = await loadManifestForTest(paths);
+    assert.equal(manifest.counts.metadataApplied, 1);
+    assert.equal(manifest.counts.metadataPresent, 1);
+    assert.equal(manifest.counts.metadataConflicting, 0);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle: missing sidecar never discards valid media', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-meta-missing-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-bytes-no-sidecar');
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1, 'media without any sidecar is still materialized');
+    assert.equal(result.failed, 0);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const database = await BundleDatabase.open(paths.databasePath);
+    try {
+      const [item] = database.listItems();
+      assert.equal(item.state, 'materialized');
+      assert.equal(item.hasSidecar, false);
+      assert.equal(item.sidecarStatus, 'missing');
+      assert.equal(item.metadataApplied, false);
+    } finally {
+      database.close();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle: invalid sidecar JSON never discards valid media', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-meta-invalid-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-bytes-with-bad-sidecar');
+    await writeFile(path.join(sourceDir, 'photo.jpg.json'), '{this is not json');
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1, 'media with a malformed sidecar is still materialized');
+    assert.equal(result.failed, 0);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const database = await BundleDatabase.open(paths.databasePath);
+    try {
+      const [item] = database.listItems();
+      assert.equal(item.state, 'materialized');
+      assert.equal(item.hasSidecar, true, 'a sidecar file was present, even though unparsable');
+      assert.equal(item.sidecarStatus, 'invalid');
+      assert.equal(item.metadataApplied, false);
+    } finally {
+      database.close();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle: detects and records metadata conflicts across duplicate sidecars', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-meta-conflict-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+
+    await writeFile(path.join(sourceDir, 'a.jpg'), 'identical-bytes-for-conflict-test');
+    await writeFile(path.join(sourceDir, 'a.jpg.json'), JSON.stringify({title: 'Original title', photoTakenTime: {timestamp: '1000000000'}}));
+    await execute('/usr/bin/zip', ['arc1.zip', 'a.jpg', 'a.jpg.json'], {cwd: sourceDir});
+
+    await writeFile(path.join(sourceDir, 'b.jpg'), 'identical-bytes-for-conflict-test');
+    await writeFile(path.join(sourceDir, 'b.jpg.json'), JSON.stringify({title: 'Different title', photoTakenTime: {timestamp: '1000000000'}}));
+    await execute('/usr/bin/zip', ['arc2.zip', 'b.jpg', 'b.jpg.json'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1);
+    assert.equal(result.duplicate, 1);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const database = await BundleDatabase.open(paths.databasePath);
+    try {
+      const items = database.listItems();
+      // Both the canonical (materialized) and the duplicate record should reflect the conflict.
+      assert.ok(items.every(item => item.metadataConflict === true), 'both records should be flagged as conflicting');
+      const conflicts = database.listMetadataConflicts();
+      assert.ok(conflicts.length >= 1, 'at least one conflict entry should be recorded');
+      const titleConflict = conflicts.find(c => c.field === 'title');
+      assert.ok(titleConflict, 'a title conflict should be recorded');
+      assert.equal(titleConflict.canonicalValue, 'Original title');
+      assert.equal(titleConflict.conflictingValue, 'Different title');
+    } finally {
+      database.close();
+    }
+
+    const manifest = await loadManifestForTest(paths);
+    assert.equal(manifest.counts.metadataConflicting, 1, 'exactly one distinct hash should be flagged conflicting');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('bundle report distinguishes metadata preserved (raw JSON kept) from metadata applied (written via ExifTool)', {skip: !exiftoolReady}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-report-meta-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeMinimalJpeg(path.join(sourceDir, 'photo.jpg'));
+    await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({title: 'Report Test', photoTakenTime: {timestamp: '1690000000'}}));
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
+
+    await prepareBundle(volumeDir, sourceDir, () => {});
+    const reportPath = await writeBundleReport(volumeDir);
+    const report = await readFileForTest(reportPath);
+    assert.match(report, /metadataApplied/);
+    assert.match(report, /metadataPresent/);
+    assert.match(report, /written into the materialized media file via ExifTool/i);
+    assert.match(report, /sidecar JSON was found and parsed/i);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+async function loadManifestForTest(paths) {
+  const text = await readFileForTest(paths.manifestPath);
+  return JSON.parse(text);
+}
+
+async function readFileForTest(target) {
+  const {readFile} = await import('node:fs/promises');
+  return readFile(target, 'utf8');
+}

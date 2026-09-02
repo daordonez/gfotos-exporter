@@ -62,6 +62,14 @@ Run `status` to inspect imported, failed, skipped, and unknown items. Failed ite
 
 Run `report` to write a Markdown result summary under `.gfotos-migrator/reports` on the external volume.
 
+## Import Bundle metadata enrichment
+
+`bundle-prepare`/`bundle-resume` preserve every Google Takeout sidecar JSON verbatim under `.gfotos-migrator/sidecars/<hash>.json` and additionally embed a subset of the sidecar fields — capture date, title, description, and GPS coordinates (preferring `geoData` over `geoDataExif` when both are present) — directly into the materialized media file via ExifTool, so a later Photos import can pick them up without needing the sidecar. Fields ExifTool cannot embed for a given format (for example GPS in a GIF) are reported as unsupported but never block materialization.
+
+A missing or malformed sidecar never discards the associated media: the file is still materialized, and its metadata status is recorded as `missing` or `invalid` respectively. When identical media (same SHA-256 hash) appears more than once with divergent sidecar values, one sidecar is deterministically chosen as canonical (the first materialized occurrence); the divergence is recorded as a metadata conflict, and the conflicting sidecar's raw JSON is preserved separately under `.gfotos-migrator/sidecars/<hash>.conflict-<archive>-<entry>.json` for full provenance.
+
+Run `bundle-report` to write a Markdown summary under `.gfotos-migrator/reports` that distinguishes **metadata preserved** (raw sidecar JSON kept verbatim and indexed in `bundle.sqlite`) from **metadata applied** (fields actually written into the media file via ExifTool), and lists any metadata conflicts across duplicate copies.
+
 ## Handoff
 
 Run `handoff-check` before touching the main library. It blocks when the volume containing the main library lacks enough currently free storage for the isolated library size. iCloud optimization is not treated as available immediate capacity.

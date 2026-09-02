@@ -4,7 +4,7 @@ import {mkdir, readdir, readFile, stat, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import yauzl from 'yauzl';
-import type {MediaCandidate, MediaKind, TakeoutInventory, TakeoutMetadata} from './domain.js';
+import type {MediaCandidate, MediaKind, SidecarStatus, TakeoutInventory, TakeoutMetadata} from './domain.js';
 import {IMAGE_EXTENSIONS, VIDEO_EXTENSIONS} from './domain.js';
 import {isSafeArchivePath} from './system.js';
 
@@ -153,18 +153,67 @@ export async function sha256File(target: string): Promise<string> {
   });
 }
 
-export async function readTakeoutMetadata(jsonPath: string | undefined): Promise<TakeoutMetadata> {
-  if (!jsonPath) return {};
+export interface SidecarParseResult {
+  /** `present` when the sidecar was found and parsed as valid JSON; `missing` when no sidecar path was given or the file could not be read; `invalid` for malformed JSON or the wrong shape. */
+  status: SidecarStatus;
+  metadata: TakeoutMetadata;
+}
+
+interface GeoDataShape {
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
+}
+
+function isNonZeroGeo(geo: GeoDataShape | undefined): geo is Required<Pick<GeoDataShape, 'latitude' | 'longitude'>> & GeoDataShape {
+  return !!geo && typeof geo.latitude === 'number' && typeof geo.longitude === 'number' && (geo.latitude !== 0 || geo.longitude !== 0);
+}
+
+/** Google Takeout emits both `geoData` (canonical) and `geoDataExif` (fallback). Prefer the canonical value when it carries a real coordinate. */
+function pickGeoData(data: Record<string, unknown>): GeoDataShape | undefined {
+  const geoData = data.geoData as GeoDataShape | undefined;
+  const geoDataExif = data.geoDataExif as GeoDataShape | undefined;
+  if (isNonZeroGeo(geoData)) return geoData;
+  if (isNonZeroGeo(geoDataExif)) return geoDataExif;
+  return undefined;
+}
+
+export async function parseTakeoutSidecar(jsonPath: string | undefined): Promise<SidecarParseResult> {
+  if (!jsonPath) return {status: 'missing', metadata: {}};
+  let raw: string;
   try {
-    const data = JSON.parse(await readFile(jsonPath, 'utf8')) as Record<string, unknown>;
-    const taken = data.photoTakenTime as {timestamp?: string} | undefined;
-    const created = data.creationTime as {timestamp?: string} | undefined;
+    raw = await readFile(jsonPath, 'utf8');
+  } catch {
+    return {status: 'missing', metadata: {}};
+  }
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (typeof data !== 'object' || data === null) throw new Error('Sidecar JSON must be an object.');
+    const record = data as Record<string, unknown>;
+    const taken = record.photoTakenTime as {timestamp?: string} | undefined;
+    const created = record.creationTime as {timestamp?: string} | undefined;
     const timestamp = taken?.timestamp ?? created?.timestamp;
     const seconds = timestamp ? Number(timestamp) : Number.NaN;
-    return {takenAt: Number.isFinite(seconds) ? new Date(seconds * 1000) : undefined, title: typeof data.title === 'string' ? data.title : undefined};
+    const geo = pickGeoData(record);
+    const description = typeof record.description === 'string' && record.description.length > 0 ? record.description : undefined;
+    return {
+      status: 'present',
+      metadata: {
+        takenAt: Number.isFinite(seconds) ? new Date(seconds * 1000) : undefined,
+        title: typeof record.title === 'string' ? record.title : undefined,
+        description,
+        latitude: geo?.latitude,
+        longitude: geo?.longitude,
+        altitude: geo?.altitude
+      }
+    };
   } catch {
-    return {};
+    return {status: 'invalid', metadata: {}};
   }
+}
+
+export async function readTakeoutMetadata(jsonPath: string | undefined): Promise<TakeoutMetadata> {
+  return (await parseTakeoutSidecar(jsonPath)).metadata;
 }
 
 export async function removeIfExists(target: string): Promise<void> {
