@@ -36,6 +36,10 @@ Connect a mounted, writable external volume and restart guided migration. System
 
 Preparation extracts and hashes each Takeout entry independently, so a single unreadable or unsupported entry does not stop the rest of the bundle. `report` preserves the failing archive entry and error message. Do not transcode or otherwise modify originals in the Takeout source; investigate the specific archive entry separately if required.
 
+## The bundle is missing on the selected destination
+
+`status` and `report` require an existing Import Bundle. If a command reports `No bundle found at the specified volume. Run \`prepare\` first.`, confirm that you pointed `--volume` at the destination root that contains both `import/` and `.gfotos-migrator/`. If the destination has never been prepared, run `prepare` first.
+
 ## A ZIP is rejected
 
 The bundle engine rejects unsafe paths, archives with too many entries, and oversized entries. This is intentional protection against path traversal and ZIP bombs.
@@ -43,6 +47,19 @@ The bundle engine rejects unsafe paths, archives with too many entries, and over
 ## Preparation was interrupted
 
 Run `status` and `report` against the destination volume. `prepare`/`resume` are idempotent: items already materialized, duplicated, or skipped are recognized by their SHA-256 hash and are not reprocessed. Only pending and previously failed items are retried on the next run.
+
+## Missing sidecar metadata is reported
+
+The bundle status includes a `missingSidecar` count. A non-zero value means one or more materialized media files had no matching Takeout sidecar JSON. The media file can still be materialized into `import/`, but the missing metadata is preserved as a reportable state in `.gfotos-migrator/` rather than guessed or synthesized.
+
+## Bundle state is corrupt or incompatible
+
+If `prepare` or `resume` reports that bundle state is corrupt or was prepared for a different source, do not edit the Takeout ZIP archives and do not delete imported media to force recovery.
+
+- If the bundle was created from the same Takeout source and only the state is corrupt, remove `.gfotos-migrator/` from the destination and run `prepare` again.
+- If the bundle belongs to a different Takeout source, rerun `prepare` or `resume` with the original source path instead.
+
+Recovery actions apply only to the destination bundle state. The Takeout source remains read-only.
 
 ## Update check or installation fails
 

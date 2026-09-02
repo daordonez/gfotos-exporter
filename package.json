@@ -1,7 +1,7 @@
 {
   "name": "gfotos-migrator",
   "version": "1.4.1",
-  "description": "A safe local Google Takeout to isolated Photos library migrator for macOS.",
+  "description": "A safe local Google Takeout Import Bundle preparer for manual Photos import.",
   "type": "module",
   "private": true,
   "repository": {

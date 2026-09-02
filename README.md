@@ -1,6 +1,6 @@
 # gfotos-migrator
 
-A local tool that prepares a Google Photos Takeout export as an **Import Bundle**: a flat `import/` directory of deduplicated original photos and videos, plus their Google Takeout sidecar metadata, on any writable destination volume with enough free capacity. It never modifies Takeout inputs, does not require macOS, Photos, iCloud, or an APFS-formatted volume, and never automates an import into Photos. After preparation you manually open Photos (or another tool of your choice) and import the files under the reported `import/` path.
+A local tool that prepares a Google Photos Takeout export as an **Import Bundle** on any writable destination volume with enough free capacity. Each bundle has exactly two top-level outputs: a flat `import/` directory of deduplicated original photos and videos, plus a hidden `.gfotos-migrator/` state directory containing the manifest, SQLite provenance, extracted sidecar metadata, and reports. It never modifies Takeout inputs, does not require macOS, Photos, iCloud, or an APFS-formatted volume, and never automates an import into Photos. After preparation you manually open Photos (or another tool of your choice) and import the files under the reported `import/` path.
 
 ## Installation
 
@@ -45,6 +45,18 @@ Google Takeout ZIP archives are treated as read-only input and are never modifie
 
 After preparation completes, open Photos (or your preferred tool) and manually import the files under the reported `import/` path. `gfotos-migrator` does not automate Photos import, does not request Automation permission, and does not touch iCloud settings.
 
+### Bundle layout and metadata
+
+- `import/` contains only the final photo and video files to import manually.
+- `.gfotos-migrator/manifest.json` records bundle counts and source compatibility.
+- `.gfotos-migrator/bundle.sqlite` preserves SHA-256 deduplication, per-item state, and provenance back to the original archive entry.
+- `.gfotos-migrator/sidecars/` stores verbatim extracted Google Takeout sidecar JSON keyed by the canonical file hash.
+- `.gfotos-migrator/reports/` stores generated Markdown reports.
+
+When sidecar metadata is present, `gfotos-migrator` preserves a normalized metadata record in `.gfotos-migrator/` and attempts to embed supported fields into the output media. The report distinguishes fields that were applied to the output file, preserved only in bundle state, missing from the sidecar, invalid, or conflicting across duplicate inputs. A future native macOS client should consume importable media from `import/` and provenance or metadata from `.gfotos-migrator/`.
+
+After you drag files from `import/` into Photos, this tool cannot guarantee how Photos will display, retain, or normalize that metadata. Use the bundle report as the source of truth for what the Takeout sidecars contained and what the CLI verified before the manual import step.
+
 Non-interactive commands back the same guided workflow and are suitable for scripting:
 
 ```sh
@@ -63,8 +75,9 @@ Outside the guided workflow, a "Tools" menu offers the same actions (Inspect Tak
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm build
+pnpm typecheck
 pnpm test
+pnpm pack:local
 ```
 
 ## AI-assisted development
@@ -75,8 +88,8 @@ and the required repository settings are documented in
 
 ## Continuous integration and releases
 
-Every pull request and every push to `main` runs the type check, test suite, and local package build on GitHub Actions. The resulting `.tgz` is retained as a workflow artifact for seven days.
+Every pull request and every push to `main` runs `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, and `pnpm pack:local` on GitHub Actions. The resulting `.tgz` is retained as a workflow artifact for seven days.
 
-Releases use [Conventional Commits](https://www.conventionalcommits.org/). After a qualifying commit reaches `main`, Release Please opens or updates a release pull request. Merging that pull request updates the version, creates an incremental `vX.Y.Z` tag and GitHub Release, then attaches the matching `gfotos-migrator-X.Y.Z.tgz` package.
+Releases use [Conventional Commits](https://www.conventionalcommits.org/). After a qualifying commit reaches `main`, Release Please opens or updates a release pull request. Merging that pull request updates the version, creates a `gfotos-migrator-vX.Y.Z` tag and GitHub Release, then attaches the matching `gfotos-migrator-X.Y.Z.tgz` package.
 
 Use `fix:` for patch releases, `feat:` for minor releases, and `feat!:` or a `BREAKING CHANGE:` footer for major releases. Use other commit types such as `docs:` or `chore:` when a release is not required.

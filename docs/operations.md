@@ -4,7 +4,29 @@
 
 Choose any writable destination volume with enough free capacity — an external drive, a secondary internal volume, or a local directory. Guided migration inventories the Takeout source first, then discovers and lists available external volumes for selection when run interactively. The list shows each volume's name, filesystem, available space, and total capacity. System volumes, Time Machine destinations, and read-only volumes are excluded from the interactive list, but any writable filesystem is accepted — there is no APFS requirement and no disk formatting or erasure step. `inspect` and `prepare`/`resume` validate that the selected destination is writable and has enough free space (uncompressed Takeout media size plus 20 percent headroom) before writing anything.
 
-The Import Bundle is written under the destination volume root: a flat `import/` directory containing deduplicated original photos and videos, and a `.gfotos-migrator/` directory holding the manifest, SQLite state, extracted sidecar metadata, and reports. No other top-level entries are created.
+## Import Bundle contract
+
+The Import Bundle is written under the destination volume root and always has exactly two top-level outputs:
+
+- `import/`: a flat directory containing only the final deduplicated photo and video files for manual import.
+- `.gfotos-migrator/`: hidden bundle state containing `manifest.json`, `bundle.sqlite`, extracted sidecar JSON under `sidecars/`, and generated Markdown reports under `reports/`.
+
+No other top-level entries are created by bundle preparation. If a future native macOS client consumes this bundle, it should read importable media from `import/` and provenance or metadata from `.gfotos-migrator/`.
+
+## Metadata coverage
+
+Google Takeout sidecar JSON is preserved under `.gfotos-migrator/sidecars/` and normalized into SQLite state so the bundle can report provenance, missing fields, invalid JSON, and conflicting values across duplicates. When supported by the output file format and local ExifTool installation, `gfotos-migrator` also verifies selected fields after embedding them into the copied media file.
+
+The bundle report is the authoritative record of what was preserved before the manual import step:
+
+- `applied`: a supported field was verified as embedded into the output media file.
+- `present`: metadata was preserved in bundle state, but embedding was not attempted for that item.
+- `unsupported`: the field was present in the Takeout metadata but could not be verified as embedded for that format or environment.
+- `missing`: the sidecar was absent or the field was not present in the sidecar.
+- `invalid`: the sidecar JSON could not be parsed.
+- `conflicting`: duplicate media shared a hash but provided different sidecar values.
+
+After you drag files from `import/` into Photos, `gfotos-migrator` cannot guarantee which metadata fields Photos will retain, normalize, or display. Treat `.gfotos-migrator/` and its report as the source of truth for preserved Takeout provenance and metadata.
 
 ## Manual Photos import
 
@@ -47,4 +69,13 @@ The installer selects the latest published release, removes any previous install
 
 Run `status --volume <destination-volume>` to inspect the bundle manifest: total, materialized, duplicate, failed, skipped, pending, and missing-sidecar counts. Run `report --volume <destination-volume>` to write a Markdown result summary under `.gfotos-migrator/reports` on the destination volume, including per-item state and error detail.
 
-`prepare`/`resume` are idempotent and resumable: rerunning them with the same Takeout source and destination volume skips items already materialized, duplicated, or skipped, and only retries items that previously failed or were never processed. If the manifest is corrupt or was created for a different Takeout source, `prepare`/`resume` fail with guidance to either use the original source to resume or remove `.gfotos-migrator/` on the volume to start fresh.
+`prepare`/`resume` are idempotent and resumable: rerunning them with the same Takeout source and destination volume skips items already materialized, duplicated, or skipped, and only retries items that previously failed or were never processed.
+
+Use the following recovery rules:
+
+- **Interrupted preparation:** rerun `prepare` or `resume` with the same `--source` and `--volume`. Completed items are recognized from bundle state and are not redone.
+- **Missing bundle state:** if `status` or `report` says no bundle exists on the selected volume, run `prepare` first or point the command at the correct destination root that contains both `import/` and `.gfotos-migrator/`.
+- **Corrupt bundle state:** if the manifest is missing required fields or cannot be parsed, do not edit Takeout inputs. Remove only `.gfotos-migrator/` on the destination to start fresh.
+- **Incompatible bundle state:** if the bundle was prepared from a different Takeout source, resume only with the original source. Otherwise remove `.gfotos-migrator/` and prepare a new bundle on that destination.
+
+Do not delete or rewrite files under `import/` to recover from bundle-state problems. Recovery always acts on the destination bundle state and never on the original Takeout ZIP archives.
