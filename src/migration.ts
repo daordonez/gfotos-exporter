@@ -48,7 +48,7 @@ export async function importCandidates(paths: MigrationPaths, candidates: MediaC
           database.save({hash, archivePath: candidate.archivePath, entryPath: candidate.entryPath, mediaKind: candidate.kind, status: 'pending'});
           if (candidate.sidecarEntryPath && jsonPath) await extractEntry(candidate.sidecarArchivePath ?? candidate.archivePath, candidate.sidecarEntryPath, jsonPath);
           const metadata = await readTakeoutMetadata(jsonPath);
-          await applyTakeoutMetadata(filePath, candidate.kind, metadata).catch(() => false);
+          await applyTakeoutMetadata(filePath, candidate.kind, metadata).catch(() => ({}));
           await importIntoOpenPhotosLibrary(filePath);
           database.save({hash, archivePath: candidate.archivePath, entryPath: candidate.entryPath, mediaKind: candidate.kind, status: 'imported'});
           progress.imported++;
