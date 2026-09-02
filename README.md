@@ -1,10 +1,10 @@
 # gfotos-migrator
 
-A local macOS tool that imports Google Photos Takeout ZIP archives into an isolated Photos library on an external APFS volume. It does not modify the main Photos library during migration.
+A local macOS tool that prepares Google Photos Takeout ZIP archives into a portable Import Bundle (`import/`) on any writable external volume, ready for a manual import into Photos. It never opens Photos, never requests Automation permission, and never modifies the main Photos library.
 
 ## Installation
 
-The installer prepares Node.js, npm, and ExifTool, displays the three latest published releases, and makes `gfotos-migrator` available to the current user. Pressing Enter selects the latest release.
+The installer prepares Node.js and npm, displays the three latest published releases, and makes `gfotos-migrator` available to the current user. Pressing Enter selects the latest release.
 
 1. Clone the repository:
 
@@ -21,11 +21,11 @@ chmod +x install-gfotos-migrator.sh
 gfotos-migrator --help
 ```
 
-The installer supports macOS and Linux for dependency installation. Migration itself requires macOS, Photos, and an external APFS volume.
+The installer supports macOS and Linux for dependency installation. External volume discovery relies on macOS tools (`diskutil`, `df`), so guided migration requires macOS.
 
 ## Usage
 
-Start the guided workflow:
+Run `gfotos-migrator` with no arguments (or `gfotos-migrator guided-migration`) to open the root menu with two choices: **Start guided migration** and **Tools**.
 
 ```sh
 gfotos-migrator guided-migration
@@ -41,11 +41,9 @@ To upgrade from version `0.0.0` or any release that predates the in-app updater,
 
 See the [upgrade compatibility matrix](docs/operations.md#upgrade-compatibility-matrix) for the full version table and repair steps.
 
-The target library is `GoogleTakeoutMigration.photoslibrary`. It must remain outside iCloud Photos and cannot be the System Photo Library. Takeout ZIP archives are treated as read-only input.
+Takeout ZIP archives are treated as read-only input. After selecting a source folder, guided migration automatically discovers and lists selectable external volumes for the Import Bundle destination — its name, filesystem, available space, and total capacity. System volumes, Time Machine destinations, and read-only volumes are excluded. Any writable filesystem with enough free space is accepted; no APFS conversion or disk formatting is performed. Guided migration then materializes the bundle under `<volume>/import`, deduplicating by SHA-256, and reports the `import/` folder, verification status, summary counts, and the single remaining manual step: opening Photos, choosing **File > Import**, and selecting the `import/` folder.
 
-After selecting a source folder with Takeout ZIP archives, guided migration automatically discovers and lists available external volumes for selection. The list includes the volume name, filesystem, available space, and total capacity. System volumes, Time Machine destinations, and read-only volumes are excluded. If an APFS volume with sufficient space is selected, it is used immediately. If a non-APFS volume or a volume without enough space is selected, the workflow proceeds to format the volume's entire physical disk after exact whole-disk identifier confirmation. The default descriptive volume name is `GPhotos_Export` and can be changed before formatting. If no selectable external volume is connected, the workflow offers the option to format an external disk or cancel the migration.
-
-To erase and prepare an external disk, use `prepare-volume` only after confirming its identifier in Disk Utility or with `diskutil list`: this operation deletes all contents of the selected disk.
+The **Tools** submenu exposes the same operations as non-interactive commands for operators and automation: `inspect`, `prepare`/`resume`, `status`, and `report`. See [the operations guide](docs/operations.md#tools) for details.
 
 ## Development
 

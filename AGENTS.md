@@ -2,9 +2,9 @@
 
 ## Project purpose
 
-`gfotos-migrator` is a local TypeScript and Ink CLI that migrates Google Photos Takeout ZIP archives into an isolated macOS Photos library on an external APFS volume. It supports photos and videos, preserves migration state in SQLite, and provides a deliberate manual handoff to the user's main Photos library.
+`gfotos-migrator` is a local TypeScript and Ink CLI that prepares Google Photos Takeout ZIP archives into a portable Import Bundle (`import/` plus `.gfotos-migrator/` state) on any writable external volume, ready for a manual import into Photos. It supports photos and videos and preserves bundle state in SQLite.
 
-The primary requirement is safety: the migration workflow must never modify the main Photos library or enable iCloud Photos for the isolated library.
+The primary requirement is safety: the tool must never open Photos, request Automation permission, or modify the main Photos library.
 
 ## Language and code standards
 
@@ -15,14 +15,11 @@ The primary requirement is safety: the migration workflow must never modify the 
 
 ## Repository map
 
-- `src/cli.tsx`: command dispatch and non-interactive commands.
-- `src/tui.tsx`: guided interactive migration workflow.
+- `src/cli.tsx`: command dispatch (`guided-migration`, `inspect`, `prepare`, `resume`, `status`, `report`).
+- `src/tui.tsx`: root menu, Tools submenu, and the guided Import Bundle assistant.
 - `src/takeout.ts`: ZIP inventory, safe extraction, and Google Takeout sidecar handling.
-- `src/media.ts`: media metadata normalization and ExifTool integration.
-- `src/migration.ts`: migration paths, hashes, import orchestration, and reporting inputs.
-- `src/database.ts`: SQLite migration state.
-- `src/photos.ts`: Apple Photos automation.
-- `src/volume.ts`: APFS, capacity, and external disk validation.
+- `src/bundle.ts`, `src/bundle-database.ts`: portable Import Bundle engine and SQLite state.
+- `src/volume.ts`: capacity and external volume discovery.
 - `docs/operations.md`: operator workflow and recovery.
 - `docs/troubleshooting.md`: known failures and operator actions.
 - `test/core.test.mjs`: native Node test suite.
@@ -30,15 +27,11 @@ The primary requirement is safety: the migration workflow must never modify the 
 ## Safety invariants
 
 - Treat Google Takeout archives and extracted originals as read-only input. Never alter originals in place.
-- Import only into `GoogleTakeoutMigration.photoslibrary` on the selected external APFS volume.
-- Never set the isolated library as the System Photo Library and never enable iCloud Photos in it.
-- Do not automate imports into, deletion of, or configuration changes to the user's main Photos library.
-- Keep the manual handoff explicit: it happens only after `handoff-check` and user review in Photos.
-- Preserve SQLite state for imported, failed, skipped, and unknown items. Do not automatically retry `unknown` items because Photos may have accepted them before an interruption.
+- `guided-migration`, `inspect`, `prepare`, `resume`, `status`, and `report` must never open Photos, invoke AppleScript/Automation, or format/erase a disk.
+- Do not automate imports into, deletion of, or configuration changes to the user's main Photos library. Bringing the prepared `import/` folder into Photos remains a manual, operator-performed step.
+- Preserve bundle state (materialized, duplicate, failed, skipped, pending) for every item. `prepare`/`resume` must be safe to rerun and must recognize already materialized or duplicate items by their SHA-256 hash.
 - Preserve SHA-256 deduplication unless a migration and recovery strategy is changed together.
 - ZIP handling must remain resistant to path traversal and ZIP bombs. Do not buffer complete video files in memory.
-- `prepare-volume` is destructive. It must accept only an external whole-disk identifier and require an exact, explicit confirmation of that identifier before invoking `diskutil eraseDisk`.
-- `cleanup` must require the exact isolated-library confirmation and must never accept a broad path or the main library.
 
 ## Change requirements
 

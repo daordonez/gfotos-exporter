@@ -565,6 +565,93 @@ test('bundle deduplication: three identical files yield one output and two dupli
   }
 });
 
+test('cli --help documents guided-migration and the non-interactive bundle commands only', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const cliPath = path.join(root, 'dist', 'cli.js');
+  const {stdout} = await execute(process.execPath, [cliPath, '--help']);
+  for (const command of ['guided-migration', 'inspect', 'prepare', 'resume', 'status', 'report']) {
+    assert.ok(stdout.includes(command), `--help should mention ${command}`);
+  }
+  for (const removed of ['doctor', 'import-takeout', 'handoff-check', 'cleanup', 'prepare-volume', 'photos-running', 'bundle-prepare', 'bundle-status', 'bundle-report']) {
+    assert.ok(!stdout.includes(removed), `--help should not mention removed command ${removed}`);
+  }
+});
+
+test('cli rejects unknown commands with a non-zero exit code', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const cliPath = path.join(root, 'dist', 'cli.js');
+  await assert.rejects(execute(process.execPath, [cliPath, 'doctor']));
+  await assert.rejects(execute(process.execPath, [cliPath, 'cleanup']));
+});
+
+test('cli prepare/status/report round trip produces an import/ folder and readable bundle state', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const cliPath = path.join(root, 'dist', 'cli.js');
+  const sourceDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-cli-source-'));
+  const volumeDir = await mkdtemp(path.join(os.tmpdir(), 'gfotos-cli-volume-'));
+  try {
+    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo');
+    await execute('/usr/bin/zip', ['takeout.zip', 'photo.jpg'], {cwd: sourceDir});
+
+    const prepared = await execute(process.execPath, [cliPath, 'prepare', '--source', sourceDir, '--volume', volumeDir]);
+    const prepareResult = JSON.parse(prepared.stdout.slice(prepared.stdout.indexOf('{')));
+    assert.equal(prepareResult.materialized, 1);
+    assert.equal(prepareResult.failed, 0);
+
+    const importedFiles = await require('node:fs/promises').readdir(path.join(volumeDir, 'import'));
+    assert.deepEqual(importedFiles, ['photo.jpg']);
+
+    const statusOutput = await execute(process.execPath, [cliPath, 'status', '--volume', volumeDir]);
+    const manifest = JSON.parse(statusOutput.stdout);
+    assert.equal(manifest.counts.materialized, 1);
+
+    const reportOutput = await execute(process.execPath, [cliPath, 'report', '--volume', volumeDir]);
+    assert.ok(reportOutput.stdout.trim().endsWith('.md'));
+
+    const resumed = await execute(process.execPath, [cliPath, 'resume', '--source', sourceDir, '--volume', volumeDir]);
+    const resumeResult = JSON.parse(resumed.stdout.slice(resumed.stdout.indexOf('{')));
+    assert.equal(resumeResult.materialized, 1, 'resume should recognize the already materialized item');
+  } finally {
+    await rm(sourceDir, {recursive: true, force: true});
+    await rm(volumeDir, {recursive: true, force: true});
+  }
+});
+
+test('tui root menu has exactly Start guided migration and Tools, with a Tools submenu', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const tuiSource = await require('node:fs/promises').readFile(path.join(root, 'src', 'tui.tsx'), 'utf8');
+  const menuBlock = tuiSource.match(/screen === 'menu' && <>([\s\S]*?)<\/>}/)?.[1] ?? '';
+  assert.ok(menuBlock.includes('Start guided migration'));
+  assert.ok(menuBlock.includes('Tools'));
+  assert.equal((menuBlock.match(/label:/g) ?? []).length, 2, 'the root menu must have exactly two choices');
+
+  const toolsBlock = tuiSource.match(/screen === 'tools' && <>([\s\S]*?)<\/>}/)?.[1] ?? '';
+  for (const option of ['Inspect Takeout', 'Prepare or resume Import Bundle', 'Status', 'Report', 'Back']) {
+    assert.ok(toolsBlock.includes(option), `Tools submenu should include ${option}`);
+  }
+});
+
+test('tui guided completion reports import/, verification status, summary counts, and a single manual import action', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const tuiSource = await require('node:fs/promises').readFile(path.join(root, 'src', 'tui.tsx'), 'utf8');
+  const completeBlock = tuiSource.match(/screen === 'complete' && progress && <>([\s\S]*?)<\/>}/)?.[1] ?? '';
+  assert.ok(completeBlock.includes("'import'"), 'completion should reference the import/ folder');
+  assert.ok(/Verification/.test(completeBlock));
+  assert.ok(/materialized/.test(completeBlock) && /duplicate/.test(completeBlock) && /failed/.test(completeBlock) && /skipped/.test(completeBlock));
+  assert.equal((completeBlock.match(/Manual action/g) ?? []).length, 1, 'there must be exactly one manual action on completion');
+  assert.ok(!/openPhotosLibrary|photos\.js/.test(completeBlock), 'completion must not open Photos automatically');
+});
+
+test('guided-migration and its tui module contain no Photos automation, AppleScript, iCloud, handoff, cleanup, or disk-erase behavior', async () => {
+  const root = path.resolve(fileURLToPath(import.meta.url), '../../');
+  const tuiSource = await require('node:fs/promises').readFile(path.join(root, 'src', 'tui.tsx'), 'utf8');
+  const cliSource = await require('node:fs/promises').readFile(path.join(root, 'src', 'cli.tsx'), 'utf8');
+  for (const forbidden of ['openPhotosLibrary', 'AppleScript', 'iCloud', 'handoff', 'cleanup', 'eraseExternalDisk', 'validateExternalApfs', 'GoogleTakeoutMigration.photoslibrary']) {
+    assert.ok(!tuiSource.includes(forbidden), `tui.tsx should not reference ${forbidden}`);
+    assert.ok(!cliSource.includes(forbidden), `cli.tsx should not reference ${forbidden}`);
+  }
+});
+
 test('importing bundle-database module does not emit the node:sqlite experimental warning', async () => {
   const root = path.resolve(fileURLToPath(import.meta.url), '../../');
   const databasePath = path.join(root, 'dist', 'bundle-database.js');
