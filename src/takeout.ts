@@ -153,18 +153,63 @@ export async function sha256File(target: string): Promise<string> {
   });
 }
 
-export async function readTakeoutMetadata(jsonPath: string | undefined): Promise<TakeoutMetadata> {
-  if (!jsonPath) return {};
+function numberOrUndefined(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+/** Google Takeout sidecars report (0, 0, 0) for photos without location data; treat that as absent. */
+function isMeaningfulCoordinate(latitude: number | undefined, longitude: number | undefined): boolean {
+  return latitude !== undefined && longitude !== undefined && (latitude !== 0 || longitude !== 0);
+}
+
+export type SidecarState = 'present' | 'missing' | 'invalid';
+
+export interface TakeoutMetadataResult {
+  metadata: TakeoutMetadata;
+  state: SidecarState;
+}
+
+export async function readTakeoutMetadataWithState(jsonPath: string | undefined): Promise<TakeoutMetadataResult> {
+  if (!jsonPath) return {metadata: {}, state: 'missing'};
   try {
     const data = JSON.parse(await readFile(jsonPath, 'utf8')) as Record<string, unknown>;
     const taken = data.photoTakenTime as {timestamp?: string} | undefined;
     const created = data.creationTime as {timestamp?: string} | undefined;
     const timestamp = taken?.timestamp ?? created?.timestamp;
     const seconds = timestamp ? Number(timestamp) : Number.NaN;
-    return {takenAt: Number.isFinite(seconds) ? new Date(seconds * 1000) : undefined, title: typeof data.title === 'string' ? data.title : undefined};
+    const takenAtSource: TakeoutMetadata['takenAtSource'] = taken?.timestamp ? 'photoTakenTime' : created?.timestamp ? 'creationTime' : undefined;
+
+    const geoData = data.geoData as Record<string, unknown> | undefined;
+    const geoDataExif = data.geoDataExif as Record<string, unknown> | undefined;
+    const latitude = numberOrUndefined(geoData?.latitude) ?? numberOrUndefined(geoDataExif?.latitude);
+    const longitude = numberOrUndefined(geoData?.longitude) ?? numberOrUndefined(geoDataExif?.longitude);
+    const altitude = numberOrUndefined(geoData?.altitude) ?? numberOrUndefined(geoDataExif?.altitude);
+    const hasLocation = isMeaningfulCoordinate(latitude, longitude);
+
+    return {
+      metadata: {
+        takenAt: Number.isFinite(seconds) ? new Date(seconds * 1000) : undefined,
+        takenAtSource,
+        title: typeof data.title === 'string' ? data.title : undefined,
+        description: typeof data.description === 'string' && data.description.trim() !== '' ? data.description : undefined,
+        latitude: hasLocation ? latitude : undefined,
+        longitude: hasLocation ? longitude : undefined,
+        altitude: hasLocation ? altitude : undefined
+      },
+      state: 'present'
+    };
   } catch {
-    return {};
+    return {metadata: {}, state: 'invalid'};
   }
+}
+
+export async function readTakeoutMetadata(jsonPath: string | undefined): Promise<TakeoutMetadata> {
+  return (await readTakeoutMetadataWithState(jsonPath)).metadata;
 }
 
 export async function removeIfExists(target: string): Promise<void> {

@@ -1,9 +1,11 @@
 import {createHash} from 'node:crypto';
-import {rename, stat, writeFile, readFile, mkdir} from 'node:fs/promises';
+import {rename, stat, writeFile, readFile, mkdir, unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {BundleDatabase} from './bundle-database.js';
-import type {BundleItem, BundleManifest, BundlePaths} from './domain.js';
-import {extractEntry, inventoryTakeout, listTakeoutArchives, sha256File} from './takeout.js';
+import type {BundleItem, BundleManifest, BundlePaths, MetadataField, MetadataFieldStatuses, TakeoutMetadata} from './domain.js';
+import {METADATA_FIELDS, metadataFieldValue, metadataHasField} from './domain.js';
+import {extractEntry, inventoryTakeout, listTakeoutArchives, readTakeoutMetadataWithState, sha256File} from './takeout.js';
+import {applyTakeoutMetadata} from './media.js';
 import {ensureDirectory} from './system.js';
 
 export interface BundleProgress {
@@ -14,6 +16,47 @@ export interface BundleProgress {
   failed: number;
   skipped: number;
   current?: string;
+}
+
+/**
+ * Builds a per-field status record from a sidecar parse outcome and (if the item was
+ * materialized) the outcome of embedding fields into the output media via ExifTool.
+ *
+ * - 'invalid': the sidecar JSON existed but could not be parsed.
+ * - 'missing': no sidecar, or the sidecar was valid but lacked this field.
+ * - 'applied' / 'unsupported': the field had a value and was (or was not) verified as embedded.
+ * - 'present': the field had a value but embedding was not attempted (e.g. duplicate item).
+ */
+function buildFieldStatuses(sidecarState: 'present' | 'missing' | 'invalid', metadata: TakeoutMetadata, applied: MetadataFieldStatuses): MetadataFieldStatuses {
+  const statuses: MetadataFieldStatuses = {};
+  for (const field of METADATA_FIELDS) {
+    if (sidecarState === 'invalid') {
+      statuses[field] = 'invalid';
+      continue;
+    }
+    if (!metadataHasField(metadata, field)) {
+      statuses[field] = 'missing';
+      continue;
+    }
+    statuses[field] = applied[field] ?? 'present';
+  }
+  return statuses;
+}
+
+function recordFieldConflicts(
+  database: BundleDatabase,
+  hash: string,
+  canonical: {metadata: TakeoutMetadata; sourceArchive: string; sourceEntry: string},
+  duplicate: {metadata: TakeoutMetadata; sourceArchive: string; sourceEntry: string}
+): void {
+  for (const field of METADATA_FIELDS) {
+    const canonicalValue = metadataFieldValue(canonical.metadata, field);
+    const duplicateValue = metadataFieldValue(duplicate.metadata, field);
+    if (canonicalValue === duplicateValue) continue;
+    if (canonicalValue === undefined && duplicateValue === undefined) continue;
+    database.recordConflict(hash, field as MetadataField, canonicalValue, canonical.sourceArchive, canonical.sourceEntry);
+    database.recordConflict(hash, field as MetadataField, duplicateValue, duplicate.sourceArchive, duplicate.sourceEntry);
+  }
 }
 
 export async function initializeBundlePaths(volumePath: string): Promise<BundlePaths> {
@@ -144,6 +187,17 @@ export async function prepareBundle(
         await extractEntry(candidate.archivePath, candidate.entryPath, tempFile);
         const hash = await sha256File(tempFile);
 
+        // Extract the sidecar (if any) to a temp location so we can normalize its metadata
+        // regardless of whether this candidate ends up materialized or as a duplicate.
+        const hasSidecar = candidate.sidecarEntryPath !== undefined;
+        let sidecarTempPath: string | undefined;
+        if (hasSidecar && candidate.sidecarEntryPath) {
+          const sidecarArchive = candidate.sidecarArchivePath ?? candidate.archivePath;
+          sidecarTempPath = path.join(tempDir, `${archiveName}-${Date.now()}-${path.basename(candidate.sidecarEntryPath)}`);
+          await extractEntry(sidecarArchive, candidate.sidecarEntryPath, sidecarTempPath).catch(() => { sidecarTempPath = undefined; });
+        }
+        const {metadata, state: sidecarState} = await readTakeoutMetadataWithState(sidecarTempPath);
+
         // Check if this hash is already materialized (deduplication)
         const canonical = database.find(hash);
         if (canonical?.state === 'materialized') {
@@ -153,28 +207,41 @@ export async function prepareBundle(
             entryPath: candidate.entryPath,
             mediaKind: candidate.kind,
             state: 'duplicate',
-            hasSidecar: candidate.sidecarEntryPath !== undefined,
+            hasSidecar,
             canonicalHash: hash
           };
           database.save(item);
+
+          // Compare against the canonical item's normalized metadata and record any divergent values.
+          const canonicalMetadata = database.getItemMetadata(hash);
+          if (canonicalMetadata) {
+            recordFieldConflicts(
+              database,
+              hash,
+              {metadata: canonicalMetadata.metadata, sourceArchive: canonicalMetadata.sourceArchive, sourceEntry: canonicalMetadata.sourceEntry},
+              {metadata, sourceArchive: archiveName, sourceEntry: candidate.entryPath}
+            );
+          }
+
           progress.duplicate++;
-          // Clean up temp file
-          await rename(tempFile, tempFile + '.del').catch(() => undefined);
-          try { await stat(tempFile + '.del'); } catch { /* already gone */ }
-          const {unlink} = await import('node:fs/promises');
-          await unlink(tempFile + '.del').catch(() => undefined);
+          // Clean up temp files
+          await unlink(tempFile).catch(() => undefined);
+          if (sidecarTempPath) await unlink(sidecarTempPath).catch(() => undefined);
         } else {
           const flatName = await safeImportFilename(paths.importPath, path.basename(candidate.entryPath));
           const finalDest = path.join(paths.importPath, flatName);
           await rename(tempFile, finalDest);
 
-          // Extract sidecar if present
-          const sidecarArchive = candidate.sidecarArchivePath ?? candidate.archivePath;
-          const hasSidecar = candidate.sidecarEntryPath !== undefined;
-          if (hasSidecar && candidate.sidecarEntryPath) {
+          // Preserve the original sidecar JSON verbatim in the hidden bundle area.
+          if (sidecarTempPath) {
             const sidecarDest = path.join(paths.sidecarsPath, `${hash}.json`);
-            await extractEntry(sidecarArchive, candidate.sidecarEntryPath, sidecarDest).catch(() => undefined);
+            await rename(sidecarTempPath, sidecarDest).catch(() => undefined);
           }
+
+          // Embed supported fields into the output media and record what was applied.
+          const applied = await applyTakeoutMetadata(finalDest, candidate.kind, metadata).catch(() => ({}) as MetadataFieldStatuses);
+          const fieldStatuses = buildFieldStatuses(sidecarState, metadata, applied);
+          database.saveItemMetadata({hash, sidecarState, metadata, fieldStatuses, sourceArchive: archiveName, sourceEntry: candidate.entryPath});
 
           const item: BundleItem = {
             hash,
@@ -203,7 +270,6 @@ export async function prepareBundle(
           error: errorMessage
         });
         // Clean up temp file
-        const {unlink} = await import('node:fs/promises');
         await unlink(tempFile).catch(() => undefined);
         progress.failed++;
       }
@@ -225,6 +291,7 @@ export async function prepareBundle(
       pending: stateCounts.pending,
       missingSidecar
     };
+    manifest.metadataCounts = database.countMetadata();
     await saveManifest(paths, manifest);
 
     return progress;
@@ -248,6 +315,8 @@ export async function writeBundleReport(volumePath: string): Promise<string> {
   try {
     const items = database.listItems();
     const duplicates = database.listDuplicates();
+    const metadataCounts = manifest.metadataCounts ?? database.countMetadata();
+    const conflicts = database.listConflicts();
     const lines: string[] = [
       '# Import Bundle Report',
       '',
@@ -261,6 +330,30 @@ export async function writeBundleReport(volumePath: string): Promise<string> {
       '| Metric | Count |',
       '| --- | ---: |',
       ...Object.entries(manifest.counts).map(([k, v]) => `| ${k} | ${v} |`),
+      '',
+      '## Metadata',
+      '',
+      'Field-level counts across all materialized and duplicate items. "Preserved" (present/applied/unsupported) means a normalized metadata record exists; "applied" means the field was verified as embedded into the output media via ExifTool.',
+      '',
+      '| Status | Count |',
+      '| --- | ---: |',
+      `| present (preserved, embedding not attempted) | ${metadataCounts.present - metadataCounts.applied - metadataCounts.unsupported} |`,
+      `| applied (embedded into output media) | ${metadataCounts.applied} |`,
+      `| unsupported (could not be embedded for this format) | ${metadataCounts.unsupported} |`,
+      `| missing (no value in sidecar) | ${metadataCounts.missing} |`,
+      `| invalid (sidecar JSON could not be parsed) | ${metadataCounts.invalid} |`,
+      `| conflicting (same hash, divergent sidecar values) | ${metadataCounts.conflicting} |`,
+      '',
+      '### Conflicts',
+      '',
+      conflicts.length === 0
+        ? 'No metadata conflicts detected.'
+        : '| SHA-256 (prefix) | Field | Value | Source archive | Source entry |\n| --- | --- | --- | --- | --- |\n' +
+          conflicts.flatMap(conflict =>
+            conflict.values.map(value =>
+              `| ${conflict.hash.slice(0, 12)} | ${conflict.field} | ${value.value.replaceAll('|', '\\|')} | ${value.sourceArchive.replaceAll('|', '\\|')} | ${value.sourceEntry.replaceAll('|', '\\|')} |`
+            )
+          ).join('\n'),
       '',
       '## Items',
       '',
