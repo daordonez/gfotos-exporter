@@ -36,7 +36,10 @@ function buildArguments(kind: MediaKind, metadata: TakeoutMetadata): string[] {
       `-GPSLongitudeRef=${metadata.longitude >= 0 ? 'E' : 'W'}`
     );
     if (metadata.altitude !== undefined) {
-      args.push(`-GPSAltitude=${Math.abs(metadata.altitude)}`, `-GPSAltitudeRef=${metadata.altitude < 0 ? 1 : 0}`);
+      // The '#' suffix forces a numeric assignment for GPSAltitudeRef, bypassing ExifTool's
+      // text PrintConv table ('Above/Below Sea Level'), which would otherwise silently reject
+      // a bare '1' and leave the ref at 0 (above sea level) for negative altitudes.
+      args.push(`-GPSAltitude=${Math.abs(metadata.altitude)}`, `-GPSAltitudeRef#=${metadata.altitude < 0 ? 1 : 0}`);
     }
   }
   return args;
@@ -46,6 +49,7 @@ interface ReadBack {
   GPSLatitude?: number;
   GPSLongitude?: number;
   GPSAltitude?: number;
+  GPSAltitudeRef?: number;
   Title?: string;
   Description?: string;
   DateTimeOriginal?: string;
@@ -58,13 +62,19 @@ const ALTITUDE_TOLERANCE = 0.5;
 async function readBack(filePath: string): Promise<ReadBack | undefined> {
   try {
     const result = await run('/usr/bin/env', [
-      'exiftool', '-j', '-n', '-GPSLatitude', '-GPSLongitude', '-GPSAltitude', '-Title', '-Description', '-DateTimeOriginal', '-CreateDate', filePath
+      'exiftool', '-j', '-n', '-GPSLatitude', '-GPSLongitude', '-GPSAltitude', '-GPSAltitudeRef', '-Title', '-Description', '-DateTimeOriginal', '-CreateDate', filePath
     ]);
     const parsed = JSON.parse(result.stdout) as ReadBack[];
     return parsed[0];
   } catch {
     return undefined;
   }
+}
+
+/** Combines the raw (always non-negative) GPSAltitude tag with its ref to get a signed altitude in meters. */
+function signedAltitude(readBackResult: ReadBack): number | undefined {
+  if (readBackResult.GPSAltitude === undefined) return undefined;
+  return readBackResult.GPSAltitudeRef === 1 ? -readBackResult.GPSAltitude : readBackResult.GPSAltitude;
 }
 
 /**
@@ -114,8 +124,11 @@ function fieldApplied(field: MetadataField, metadata: TakeoutMetadata, readBackR
       return metadata.latitude !== undefined && readBackResult.GPSLatitude !== undefined && Math.abs(readBackResult.GPSLatitude - metadata.latitude) < COORDINATE_TOLERANCE;
     case 'longitude':
       return metadata.longitude !== undefined && readBackResult.GPSLongitude !== undefined && Math.abs(readBackResult.GPSLongitude - metadata.longitude) < COORDINATE_TOLERANCE;
-    case 'altitude':
-      return metadata.altitude !== undefined && readBackResult.GPSAltitude !== undefined && Math.abs(readBackResult.GPSAltitude - metadata.altitude) < ALTITUDE_TOLERANCE;
+    case 'altitude': {
+      if (metadata.altitude === undefined) return false;
+      const actualAltitude = signedAltitude(readBackResult);
+      return actualAltitude !== undefined && Math.abs(actualAltitude - metadata.altitude) < ALTITUDE_TOLERANCE;
+    }
     default:
       return false;
   }
