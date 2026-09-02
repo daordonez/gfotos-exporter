@@ -1,12 +1,7 @@
 #!/usr/bin/env node
-import {readdir, rm, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import {MigrationDatabase} from './database.js';
-import {exifToolAvailable} from './media.js';
-import {importCandidates, initializePaths, requiredBytes} from './migration.js';
-import {isPhotosRunning, openPhotosLibrary} from './photos.js';
+import {checkBundleVolume, getBundleStatus, prepareBundle, requiredBundleBytes, writeBundleReport} from './bundle.js';
 import {inventoryTakeout} from './takeout.js';
-import {eraseExternalDisk, inspectVolume, validateExternalApfs} from './volume.js';
 import {runTui} from './tui.js';
 import {VERSION} from './version.js';
 
@@ -26,117 +21,72 @@ function printHelp(): void {
 
 Usage:
   gfotos-migrator guided-migration
-  gfotos-migrator doctor --source <takeout-folder> --volume <external-volume>
-  gfotos-migrator import-takeout --source <takeout-folder> --volume <external-volume>
-  gfotos-migrator resume --source <takeout-folder> --volume <external-volume>
-  gfotos-migrator status --volume <external-volume>
-  gfotos-migrator report --volume <external-volume>
-  gfotos-migrator handoff-check --volume <external-volume> --main-library <photoslibrary>
-  gfotos-migrator cleanup --volume <external-volume> --confirm-library GoogleTakeoutMigration.photoslibrary
-  gfotos-migrator prepare-volume --disk <diskN> --name <volume-name> --confirm <diskN>
+  gfotos-migrator inspect --source <takeout-folder> [--volume <destination-volume>]
+  gfotos-migrator prepare --source <takeout-folder> --volume <destination-volume>
+  gfotos-migrator resume --source <takeout-folder> --volume <destination-volume>
+  gfotos-migrator status --volume <destination-volume>
+  gfotos-migrator report --volume <destination-volume>
 
 Safety:
-  prepare-volume permanently erases the selected external whole disk.
-  import-takeout imports only into GoogleTakeoutMigration.photoslibrary on the selected volume.
+  prepare/resume build an Import Bundle (import/ plus a .gfotos-migrator/ state directory)
+  on any writable destination volume with sufficient free capacity. There is no APFS,
+  disk-erase, or Photos automation requirement. Takeout ZIP archives are treated as
+  read-only input and are never modified.
+  After preparation, open Photos manually and import the files under the reported
+  import/ path; gfotos-migrator does not automate that step.
 `);
 }
 
-async function directoryBytes(target: string): Promise<number> {
-  const entries = await readdir(target, {withFileTypes: true});
-  let total = 0;
-  for (const entry of entries) {
-    const child = path.join(target, entry.name);
-    if (entry.isDirectory()) total += await directoryBytes(child);
-    else if (entry.isFile()) total += (await stat(child)).size;
-  }
-  return total;
-}
-
-async function doctor(argumentsList: string[]): Promise<void> {
+async function inspect(argumentsList: string[]): Promise<void> {
   const source = requiredOption(argumentsList, '--source');
-  const volume = requiredOption(argumentsList, '--volume');
+  const volume = option(argumentsList, '--volume');
   const {inventory} = await inventoryTakeout(source);
-  const volumeInfo = await validateExternalApfs(volume, requiredBytes(inventory));
-  const exifTool = await exifToolAvailable();
+  const required = requiredBundleBytes(inventory);
+
+  let volumeInfo: unknown;
+  let volumeError: string | undefined;
+  if (volume) {
+    try {
+      volumeInfo = await checkBundleVolume(volume, required);
+    } catch (error) {
+      volumeError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   console.log(JSON.stringify({
-    ok: exifTool && inventory.archives > 0,
     source: path.resolve(source),
     inventory,
-    requiredBytes: requiredBytes(inventory),
+    requiredBytes: required,
     volume: volumeInfo,
-    exifTool,
-    nextStep: 'Create GoogleTakeoutMigration.photoslibrary on the selected volume, keep it outside iCloud Photos, then run import-takeout.'
+    volumeError,
+    nextStep: volume
+      ? (volumeError ? 'Resolve the reported volume issue, then run prepare.' : 'Run prepare to build the Import Bundle on the selected volume.')
+      : 'Pass --volume to validate a destination volume, then run prepare.'
   }, null, 2));
-  if (!exifTool) process.exitCode = 2;
+
+  if (volumeError) process.exitCode = 2;
 }
 
-async function importTakeout(argumentsList: string[]): Promise<void> {
+async function prepare(argumentsList: string[]): Promise<void> {
   const source = requiredOption(argumentsList, '--source');
   const volume = requiredOption(argumentsList, '--volume');
-  const {inventory, media} = await inventoryTakeout(source);
-  await validateExternalApfs(volume, requiredBytes(inventory));
-  if (!await exifToolAvailable()) throw new Error('ExifTool is required. Install it with: brew install exiftool');
-  const paths = await initializePaths(path.resolve(volume));
-  try {
-    await stat(paths.libraryPath);
-  } catch {
-    throw new Error(`The isolated library does not exist: ${paths.libraryPath}`);
-  }
-  await openPhotosLibrary(paths.libraryPath);
-  const result = await importCandidates(paths, media, progress => {
-    process.stdout.write(`\r${progress.completed}/${progress.total} processed | ${progress.imported} imported | ${progress.skipped} skipped | ${progress.failed} failed`);
+  const result = await prepareBundle(path.resolve(volume), source, progress => {
+    process.stdout.write(`\r${progress.completed}/${progress.total} processed | ${progress.materialized} materialized | ${progress.duplicate} duplicate | ${progress.failed} failed`);
   });
   process.stdout.write('\n');
   console.log(JSON.stringify(result, null, 2));
 }
 
-async function migrationStatus(volume: string): Promise<void> {
-  const paths = await initializePaths(path.resolve(volume));
-  const database = await MigrationDatabase.open(paths.databasePath);
-  try {
-    console.log(JSON.stringify(database.countByStatus(), null, 2));
-  } finally { database.close(); }
-}
-
-async function writeReport(volume: string): Promise<void> {
-  const paths = await initializePaths(path.resolve(volume));
-  const database = await MigrationDatabase.open(paths.databasePath);
-  try {
-    const counts = database.countByStatus();
-    const items = database.listItems();
-    const report = `# Google Takeout Migration Report\n\nGenerated: ${new Date().toISOString()}\n\n| Status | Count |\n| --- | ---: |\n${Object.entries(counts).map(([status, count]) => `| ${status} | ${count} |`).join('\n')}\n\n## Items\n\n| Status | Type | Archive entry | Error |\n| --- | --- | --- | --- |\n${items.map(item => `| ${item.status} | ${item.mediaKind} | ${item.entryPath.replaceAll('|', '\\|')} | ${(item.error ?? '').replaceAll('|', '\\|')} |`).join('\n')}\n`;
-    const destination = path.join(paths.reportPath, `migration-${new Date().toISOString().replaceAll(':', '-')}.md`);
-    await writeFile(destination, report, {mode: 0o600});
-    console.log(destination);
-  } finally { database.close(); }
-}
-
-async function handoffCheck(argumentsList: string[]): Promise<void> {
+async function status(argumentsList: string[]): Promise<void> {
   const volume = requiredOption(argumentsList, '--volume');
-  const mainLibrary = requiredOption(argumentsList, '--main-library');
-  const paths = await initializePaths(path.resolve(volume));
-  const stagingBytes = await directoryBytes(paths.libraryPath);
-  const mainVolume = await inspectVolume(mainLibrary);
-  if (mainVolume.availableBytes < stagingBytes) throw new Error('The main library volume does not have enough available space for the isolated library contents.');
-  console.log(`Handoff is safe to review. Open the main library in Photos, choose File > Import, select ${paths.libraryPath}, and review the import before choosing Import All New Items.`);
+  const manifest = await getBundleStatus(path.resolve(volume));
+  console.log(JSON.stringify(manifest, null, 2));
 }
 
-async function prepareVolume(argumentsList: string[]): Promise<void> {
-  const disk = requiredOption(argumentsList, '--disk');
-  const name = requiredOption(argumentsList, '--name');
-  const confirmation = requiredOption(argumentsList, '--confirm');
-  if (confirmation !== disk) throw new Error('Confirmation must exactly match the selected disk identifier.');
-  await eraseExternalDisk(disk, name);
-  console.log(`External disk ${disk} was erased and formatted as APFS volume ${name}.`);
-}
-
-async function cleanup(argumentsList: string[]): Promise<void> {
+async function report(argumentsList: string[]): Promise<void> {
   const volume = requiredOption(argumentsList, '--volume');
-  const confirmation = requiredOption(argumentsList, '--confirm-library');
-  if (confirmation !== 'GoogleTakeoutMigration.photoslibrary') throw new Error('Confirmation must exactly match GoogleTakeoutMigration.photoslibrary.');
-  const paths = await initializePaths(path.resolve(volume));
-  await rm(paths.libraryPath, {recursive: true, force: false});
-  console.log(`Removed isolated library: ${paths.libraryPath}`);
+  const reportPath = await writeBundleReport(path.resolve(volume));
+  console.log(reportPath);
 }
 
 async function main(): Promise<void> {
@@ -144,14 +94,10 @@ async function main(): Promise<void> {
   if (command === '--help' || command === '-h' || command === 'help') return printHelp();
   if (command === '--version' || command === '-v') return console.log(VERSION);
   if (command === 'guided-migration') return runTui();
-  if (command === 'doctor') return doctor(argumentsList);
-  if (command === 'import-takeout' || command === 'resume') return importTakeout(argumentsList);
-  if (command === 'status') return migrationStatus(requiredOption(argumentsList, '--volume'));
-  if (command === 'report') return writeReport(requiredOption(argumentsList, '--volume'));
-  if (command === 'handoff-check') return handoffCheck(argumentsList);
-  if (command === 'prepare-volume') return prepareVolume(argumentsList);
-  if (command === 'cleanup') return cleanup(argumentsList);
-  if (command === 'photos-running') return console.log(await isPhotosRunning());
+  if (command === 'inspect') return inspect(argumentsList);
+  if (command === 'prepare' || command === 'resume') return prepare(argumentsList);
+  if (command === 'status') return status(argumentsList);
+  if (command === 'report') return report(argumentsList);
   throw new Error(`Unknown command: ${command}`);
 }
 
