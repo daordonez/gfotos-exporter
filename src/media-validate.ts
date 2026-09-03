@@ -1,4 +1,4 @@
-import {readFile} from 'node:fs/promises';
+import {open, readFile, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {crc32} from 'node:zlib';
 import type {MediaKind} from './domain.js';
@@ -20,6 +20,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 /** Bounds for the leading-box scan used to sniff MP4/ISO-BMFF containers: cheap and safe against pathological or huge declared box sizes. */
 const MP4_SNIFF_MAX_BOXES = 8;
 const MP4_SNIFF_MAX_BYTES = 4096;
+const MAX_IN_MEMORY_VALIDATION_BYTES = 32 * 1024 * 1024;
 
 /**
  * Scans a bounded number of leading top-level ISO-BMFF boxes looking for a `ftyp` box, tolerating
@@ -208,6 +209,24 @@ function containerFamily(container: MediaContainer): MediaKind | undefined {
   return undefined;
 }
 
+function unknownContainerResult(filePath: string, kind: MediaKind): MediaValidationResult {
+  const extension = path.extname(filePath).toLowerCase();
+  const isUnvalidatedKnownFormat = kind === 'image' ? UNVALIDATED_IMAGE_EXTENSIONS.has(extension) : UNVALIDATED_VIDEO_EXTENSIONS.has(extension);
+  if (isUnvalidatedKnownFormat) return {status: 'unchecked', container: 'unknown'};
+  return {status: 'invalid', container: 'unknown', reason: 'File content does not match a recognized image or video container.'};
+}
+
+async function readLeadingBytes(filePath: string, maxBytes: number): Promise<Buffer> {
+  const file = await open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const {bytesRead} = await file.read(buffer, 0, maxBytes, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await file.close();
+  }
+}
+
 /**
  * Validates a media file by content, not by its file extension. Recognized containers
  * (JPEG, PNG, MP4) are structurally parsed; other formats this repository does not yet
@@ -215,6 +234,37 @@ function containerFamily(container: MediaContainer): MediaKind | undefined {
  * so they keep behaving as before, accepted by extension family. Never throws.
  */
 export async function validateMediaFile(filePath: string, kind: MediaKind): Promise<MediaValidationResult> {
+  let size: number;
+  try {
+    const fileStat = await stat(filePath);
+    size = fileStat.size;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {status: 'invalid', container: 'unknown', reason: `Could not read file metadata for validation: ${message}.`};
+  }
+
+  if (size > MAX_IN_MEMORY_VALIDATION_BYTES) {
+    let leadingBytes: Buffer;
+    try {
+      leadingBytes = await readLeadingBytes(filePath, MP4_SNIFF_MAX_BYTES);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {status: 'invalid', container: 'unknown', reason: `Could not read the file for validation: ${message}.`};
+    }
+
+    const container = detectContainer(leadingBytes);
+    if (container === 'unknown') return unknownContainerResult(filePath, kind);
+    const family = containerFamily(container);
+    if (family !== kind) {
+      return {status: 'invalid', container, reason: 'File extension/kind does not match its detected content (extension/container mismatch).'};
+    }
+    return {
+      status: 'unchecked',
+      container,
+      reason: `File is larger than ${MAX_IN_MEMORY_VALIDATION_BYTES} bytes and was not fully read into memory for structural validation.`,
+    };
+  }
+
   let buffer: Buffer;
   try {
     buffer = await readFile(filePath);
@@ -225,13 +275,7 @@ export async function validateMediaFile(filePath: string, kind: MediaKind): Prom
 
   const container = detectContainer(buffer);
   if (container === 'unknown') {
-    // Content sniffing cannot recognize these formats yet (e.g. HEIC/HEIF/TIFF/GIF images or
-    // MOV/M4V/AVI/3GP/3G2 videos), so fall back to the extension only to distinguish an
-    // expected-but-unimplemented format from actual garbage bytes misnamed as a media file.
-    const extension = path.extname(filePath).toLowerCase();
-    const isUnvalidatedKnownFormat = kind === 'image' ? UNVALIDATED_IMAGE_EXTENSIONS.has(extension) : UNVALIDATED_VIDEO_EXTENSIONS.has(extension);
-    if (isUnvalidatedKnownFormat) return {status: 'unchecked', container};
-    return {status: 'invalid', container, reason: 'File content does not match a recognized image or video container.'};
+    return unknownContainerResult(filePath, kind);
   }
 
   const family = containerFamily(container);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile, readFile, mkdir, readdir} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile, readFile, mkdir, readdir, truncate} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {promisify} from 'node:util';
@@ -1076,6 +1076,20 @@ test('validateMediaFile accepts an MP4 with a leading padding box before ftyp as
     await writeFile(filePath, buildMinimalMp4WithLeadingPadding());
     const result = await validateMediaFile(filePath, 'video');
     assert.equal(result.status, 'valid');
+    assert.equal(result.container, 'mp4');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('validateMediaFile marks large media as unchecked without full in-memory validation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-large-'));
+  try {
+    const filePath = path.join(directory, 'large.mp4');
+    await writeFile(filePath, buildMinimalMp4WithLeadingPadding());
+    await truncate(filePath, 33 * 1024 * 1024);
+    const result = await validateMediaFile(filePath, 'video');
+    assert.equal(result.status, 'unchecked');
     assert.equal(result.container, 'mp4');
   } finally {
     await rm(directory, {recursive: true, force: true});
