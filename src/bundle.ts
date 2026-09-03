@@ -251,8 +251,12 @@ export async function prepareBundle(
         // it can ever be reported as materialized. This only inspects the already-extracted
         // temp copy; the original Takeout archive is never touched.
         const validation = await validateMediaFile(tempFile, candidate.kind);
-        if (validation.status === 'invalid') {
-          throw new Error(`Rejected: ${validation.reason ?? 'the extracted file failed content validation.'}`);
+        if (validation.status !== 'valid') {
+          const reason = validation.reason
+            ?? (validation.status === 'unchecked'
+              ? 'the extracted file uses a known format that is currently unchecked by content validation.'
+              : 'the extracted file failed content validation.');
+          throw new Error(`Rejected (${validation.status}): ${reason}`);
         }
 
         // Extract the sidecar (if any) to a temp location so we can normalize its metadata

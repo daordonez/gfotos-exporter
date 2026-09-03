@@ -1174,6 +1174,38 @@ test('prepareBundle records structurally invalid extracted media as failed, not 
   }
 });
 
+test('prepareBundle records unchecked extracted media formats as failed instead of materialized', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-unchecked-media-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.heic'), Buffer.from('bytes for format without content validator'));
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.heic'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 0, 'unchecked media must not be reported as materialized');
+    assert.equal(result.failed, 1);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const db = await BundleDatabase.open(paths.databasePath);
+    try {
+      const items = db.listItems();
+      assert.equal(items.length, 1);
+      assert.equal(items[0].state, 'failed');
+      assert.ok(items[0].error?.includes('Rejected (unchecked)'));
+    } finally {
+      db.close();
+    }
+
+    const importEntries = await readdir(paths.importPath);
+    assert.ok(!importEntries.includes('photo.heic'), 'import/ must not contain unchecked media');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
 test('prepareBundle persists a distinct final-output hash alongside the source hash for valid media', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-finalhash-'));
   try {
