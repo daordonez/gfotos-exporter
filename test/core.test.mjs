@@ -1036,8 +1036,8 @@ test('writeBundleReport includes a Metadata section with counts and conflicts', 
 
 const {crc32} = await import('node:zlib');
 
-/** Minimal but structurally valid single-pixel PNG (signature + IHDR + IEND, no IDAT). */
-function buildMinimalPng() {
+/** Minimal structurally valid single-pixel PNG (signature + IHDR + IDAT + IEND). */
+function buildMinimalPng(includeIdat = true) {
   const chunk = (type, data) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(data.length, 0);
@@ -1054,7 +1054,9 @@ function buildMinimalPng() {
   ihdrData[9] = 6;
   const ihdr = chunk('IHDR', ihdrData);
   const iend = chunk('IEND', Buffer.alloc(0));
-  return Buffer.concat([signature, ihdr, iend]);
+  if (!includeIdat) return Buffer.concat([signature, ihdr, iend]);
+  const idat = chunk('IDAT', Buffer.from([0x00]));
+  return Buffer.concat([signature, ihdr, idat, iend]);
 }
 
 test('detectContainer sniffs by magic bytes only', () => {
@@ -1109,7 +1111,7 @@ test('validateJpeg accepts a structurally valid JPEG and rejects truncation', ()
   assert.equal(garbageAfterSoi.status, 'invalid');
 });
 
-test('validatePng accepts a minimal valid PNG and rejects CRC mismatches and missing IEND', () => {
+test('validatePng accepts a minimal valid PNG and rejects CRC mismatches, missing IEND, and missing IDAT', () => {
   const png = buildMinimalPng();
   const valid = validatePng(png);
   assert.equal(valid.status, 'valid');
@@ -1123,6 +1125,9 @@ test('validatePng accepts a minimal valid PNG and rejects CRC mismatches and mis
   const missingIend = png.subarray(0, png.length - 12); // drop the trailing IEND chunk
   const noIend = validatePng(missingIend);
   assert.equal(noIend.status, 'invalid');
+
+  const noIdat = validatePng(buildMinimalPng(false));
+  assert.equal(noIdat.status, 'invalid');
 });
 
 test('validateMp4 accepts the minimal fixture and rejects a truncated ftyp box', () => {

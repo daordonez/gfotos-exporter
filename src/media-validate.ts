@@ -137,6 +137,7 @@ export function validatePng(buffer: Buffer): MediaValidationResult {
   }
   let offset = 8;
   let sawIhdr = false;
+  let sawIdat = false;
   let sawIend = false;
   while (offset < buffer.length) {
     if (offset + 8 > buffer.length) {
@@ -156,10 +157,12 @@ export function validatePng(buffer: Buffer): MediaValidationResult {
       return {status: 'invalid', container, reason: `PNG chunk '${type}' failed its CRC32 check.`};
     }
     if (type === 'IHDR') sawIhdr = true;
+    if (type === 'IDAT') sawIdat = true;
     if (type === 'IEND') { sawIend = true; offset = crcEnd; break; }
     offset = crcEnd;
   }
   if (!sawIhdr) return {status: 'invalid', container, reason: 'PNG file is missing its IHDR chunk.'};
+  if (!sawIdat) return {status: 'invalid', container, reason: 'PNG file is missing at least one IDAT chunk.'};
   if (!sawIend) return {status: 'invalid', container, reason: 'PNG file is missing its IEND chunk.'};
   return {status: 'valid', container};
 }
