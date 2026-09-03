@@ -71,7 +71,7 @@ gfotos-migrator report --volume <destination-volume>
 
 `inspect` reports the Takeout inventory and, when `--volume` is given, validates that the destination is writable and has enough free capacity. `prepare` and `resume` both call the same resumable bundle engine. `status` prints the current bundle manifest, and `report` writes a Markdown summary under `.gfotos-migrator/reports` on the destination volume.
 
-Outside the guided workflow, a "Tools" menu offers the same actions (Inspect Takeout, Prepare or resume Import Bundle, Status, Report) interactively. Select "Exit" from the main menu to close the TUI cleanly without using a keyboard interrupt.
+Outside the guided workflow, a "Tools" menu offers the same actions (Inspect Takeout, Prepare or resume Import Bundle, Status, Report) plus **Analyze and repair existing Import Bundle**. The repair workflow uses only the existing `import/` and `.gfotos-migrator/` state, creates an analysis report first, and requires explicit confirmation before changing SQLite or manifest state. It can backfill verified `finalHash` values and transactionally reapply normalized metadata already stored in the bundle; it never deletes, renames, or re-encodes media. Missing or corrupt media is reported as requiring the original Takeout source. Select "Exit" from the main menu to close the TUI cleanly without using a keyboard interrupt.
 
 The [MVP checkpoint](docs/mvp-checkpoint.md) records the product capabilities, safety boundaries, and validation evidence established by the 1.5.x release line.
 

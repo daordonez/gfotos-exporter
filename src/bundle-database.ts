@@ -15,15 +15,23 @@ export interface ItemMetadataRecord {
 
 export class BundleDatabase {
   private readonly database: DatabaseSync;
+  private readonly itemSelect: string;
 
-  static async open(databasePath: string): Promise<BundleDatabase> {
-    await ensureDirectory(path.dirname(databasePath));
+  static async open(databasePath: string, options: {readOnly?: boolean} = {}): Promise<BundleDatabase> {
+    if (!options.readOnly) await ensureDirectory(path.dirname(databasePath));
     const {DatabaseSync} = await import('node:sqlite');
-    return new BundleDatabase(new DatabaseSync(databasePath));
+    return new BundleDatabase(new DatabaseSync(databasePath, options.readOnly ? {readOnly: true} : {}), options.readOnly ?? false);
   }
 
-  private constructor(database: DatabaseSync) {
+  private constructor(database: DatabaseSync, readOnly: boolean) {
     this.database = database;
+    if (readOnly) {
+      const columns = this.database.prepare('PRAGMA table_info(bundle_items)').all() as Array<{name: string}>;
+      this.itemSelect = columns.some(column => column.name === 'final_hash')
+        ? 'final_hash AS finalHash'
+        : 'NULL AS finalHash';
+      return;
+    }
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS bundle_items (
@@ -69,18 +77,19 @@ export class BundleDatabase {
     if (!columns.some(column => column.name === 'final_hash')) {
       this.database.exec('ALTER TABLE bundle_items ADD COLUMN final_hash TEXT');
     }
+    this.itemSelect = 'final_hash AS finalHash';
   }
 
   find(hash: string): BundleItem | undefined {
     const row = this.database
-      .prepare("SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, final_hash AS finalHash FROM bundle_items WHERE hash = ? AND state = 'materialized' LIMIT 1")
+      .prepare(`SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, ${this.itemSelect} FROM bundle_items WHERE hash = ? AND state = 'materialized' LIMIT 1`)
       .get(hash) as RawRow | undefined;
     return row ? toItem(row) : undefined;
   }
 
   findByEntry(archiveName: string, entryPath: string): BundleItem | undefined {
     const row = this.database
-      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, final_hash AS finalHash FROM bundle_items WHERE archive_name = ? AND entry_path = ?')
+      .prepare(`SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, ${this.itemSelect} FROM bundle_items WHERE archive_name = ? AND entry_path = ?`)
       .get(archiveName, entryPath) as RawRow | undefined;
     return row ? toItem(row) : undefined;
   }
@@ -135,7 +144,7 @@ export class BundleDatabase {
 
   listItems(): BundleItem[] {
     return (this.database
-      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, final_hash AS finalHash FROM bundle_items ORDER BY updated_at ASC')
+      .prepare(`SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, ${this.itemSelect} FROM bundle_items ORDER BY updated_at ASC`)
       .all() as unknown as RawRow[]).map(toItem);
   }
 
@@ -165,6 +174,11 @@ export class BundleDatabase {
       .prepare('SELECT hash, sidecar_state AS sidecarState, metadata_json AS metadataJson, field_statuses_json AS fieldStatusesJson, source_archive AS sourceArchive, source_entry AS sourceEntry FROM item_metadata WHERE hash = ?')
       .get(hash) as RawMetadataRow | undefined;
     return row ? toMetadataRecord(row) : undefined;
+  }
+
+  updateItemMetadataStatuses(hash: string, fieldStatuses: MetadataFieldStatuses): void {
+    this.database.prepare('UPDATE item_metadata SET field_statuses_json = ?, updated_at = CURRENT_TIMESTAMP WHERE hash = ?')
+      .run(JSON.stringify(fieldStatuses), hash);
   }
 
   recordConflict(hash: string, field: MetadataField, value: string | undefined, sourceArchive: string, sourceEntry: string): void {

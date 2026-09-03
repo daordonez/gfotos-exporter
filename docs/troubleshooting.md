@@ -73,6 +73,12 @@ If `prepare` or `resume` reports that bundle state is corrupt or was prepared fo
 
 Recovery actions apply only to the destination bundle state. The Takeout source remains read-only.
 
+## Repair reports source required or unchecked items
+
+`Tools > Analyze and repair existing Import Bundle` does not recover media bytes. Missing, unsafe, or structurally invalid outputs remain unchanged and are reported as `source required`; restore the original Takeout source and prepare a new bundle if those items are needed. Formats without a content validator are reported as `unchecked` and must not be treated as Photos-ready. Orphan files are reported only and are never deleted automatically.
+
+If repair is interrupted, reconnect the destination and run the workflow again. The repair journal and technical backup preserve completed checkpoints; already completed actions are not repeated. If the bundle version is newer than the installed tool, upgrade gfotos-migrator before attempting repair.
+
 ## Update check or installation fails
 
 The update check is optional and does not affect bundle preparation. Confirm network access and that the selected GitHub Release includes the matching `gfotos-migrator-X.Y.Z.tgz` asset, then launch guided migration again.

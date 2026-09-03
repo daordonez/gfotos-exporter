@@ -69,6 +69,12 @@ The installer selects the latest published release, removes any previous install
 
 ## Recovery
 
+### Analyze and repair an existing Import Bundle
+
+Use `Tools > Analyze and repair existing Import Bundle` for bundles created by gfotos-migrator 1.5.0 or 1.5.1. It reads only the persisted manifest, SQLite state, and files under `import/`; it does not open Takeout ZIP archives. Analysis is read-only apart from its detailed report under `.gfotos-migrator/reports/`. Only verified `finalHash` backfills and normalized metadata already stored in SQLite are eligible for repair.
+
+Before mutation, the tool creates a technical backup under `.gfotos-migrator/repair-backups/` and checkpoints each item in `.gfotos-migrator/repair-run.json`, allowing a later run to resume. Media is never deleted, renamed, re-encoded, or automatically quarantined. `source required` means the bundle cannot recreate the missing bytes or sidecar; prepare a new bundle from the original Takeout source. The workflow never touches Photos, iCloud, Photos libraries, or files outside the selected bundle.
+
 Run `status --volume <destination-volume>` to inspect the bundle manifest: total, materialized, duplicate, failed, skipped, pending, and missing-sidecar counts. Run `report --volume <destination-volume>` to write a Markdown result summary under `.gfotos-migrator/reports` on the destination volume, including per-item state and error detail.
 
 `prepare`/`resume` are idempotent and resumable: rerunning them with the same Takeout source and destination volume skips items already materialized, duplicated, or skipped, and only retries items that previously failed or were never processed.

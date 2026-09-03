@@ -16,6 +16,7 @@ import {BundleDatabase} from '../dist/bundle-database.js';
 import {checkBundleVolume, initializeBundlePaths, loadManifest, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
 import {applyTakeoutMetadata, exifToolAvailable} from '../dist/media.js';
 import {detectContainer, validateJpeg, validateMediaFile, validateMp4, validatePng} from '../dist/media-validate.js';
+import {analyzeBundle, repairBundle} from '../dist/bundle-repair.js';
 
 const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -68,6 +69,32 @@ test('checkBundleVolume validates writability and capacity for any filesystem', 
     await assert.rejects(checkBundleVolume(path.join(directory, 'missing'), 0), /does not exist/);
   } finally {
     await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('analyzes and repairs a legacy materialized output without Takeout input', async () => {
+  const volume = await mkdtemp(path.join(os.tmpdir(), 'gfotos-repair-'));
+  try {
+    const paths = await initializeBundlePaths(volume);
+    const output = path.join(paths.importPath, 'photo.jpg');
+    await writeFile(output, MINIMAL_VALID_JPEG);
+    await writeFile(paths.manifestPath, JSON.stringify({version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), sourceFingerprint: 'legacy', counts: {total: 1, materialized: 1, duplicate: 0, failed: 0, skipped: 0, pending: 0, missingSidecar: 0}}));
+    const database = await BundleDatabase.open(paths.databasePath);
+    database.save({hash: 'source-hash', archiveName: 'takeout.zip', entryPath: 'photo.jpg', mediaKind: 'image', state: 'materialized', hasSidecar: false, finalPath: 'photo.jpg'});
+    database.close();
+
+    const analysis = await analyzeBundle(volume);
+    assert.equal(analysis.summary.repairable, 1);
+    assert.equal(analysis.summary.missing, 0);
+    const repaired = await repairBundle(analysis);
+    assert.equal(repaired.summary.validated, 1);
+    assert.equal((await readFile(output)).equals(MINIMAL_VALID_JPEG), true);
+    const repairedDatabase = await BundleDatabase.open(paths.databasePath, {readOnly: true});
+    assert.match(repairedDatabase.listItems()[0].finalHash, /^[a-f0-9]{64}$/);
+    repairedDatabase.close();
+    assert.ok((await readdir(paths.bundlePath)).includes('repair-run.json'));
+  } finally {
+    await rm(volume, {recursive: true, force: true});
   }
 });
 
