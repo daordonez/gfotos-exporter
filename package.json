@@ -1,6 +1,6 @@
 {
   "name": "gfotos-migrator",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "A safe local Google Takeout Import Bundle preparer for manual Photos import.",
   "type": "module",
   "private": true,

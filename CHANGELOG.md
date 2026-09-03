@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.5.1...gfotos-migrator-v1.6.0) (2026-09-03)
+
+
+### Features
+
+* add Import Bundle repair workflow ([ac01f78](https://github.com/daordonez/gfotos-exporter/commit/ac01f783f0143741146f7f02c8549f88fa9d0cb4))
+* analyze and repair existing Import Bundles ([8e0fedd](https://github.com/daordonez/gfotos-exporter/commit/8e0fedd60a1c826c9fe937531219a9d79dbb5cfd))
+
 ## [1.5.1](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.5.0...gfotos-migrator-v1.5.1) (2026-09-03)
 
 
