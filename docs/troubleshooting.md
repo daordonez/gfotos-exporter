@@ -36,6 +36,18 @@ Connect a mounted, writable external volume and restart guided migration. System
 
 Preparation extracts and hashes each Takeout entry independently, so a single unreadable or unsupported entry does not stop the rest of the bundle. `report` preserves the failing archive entry and error message. Do not transcode or otherwise modify originals in the Takeout source; investigate the specific archive entry separately if required.
 
+## Media file rejected during validation
+
+Each extracted photo or video is validated by content (JPEG/PNG/MP4 structure is parsed, not just the file extension) before it is ever reported as `materialized`. If the extracted bytes are structurally invalid, the item is recorded as `failed` with a diagnostic message instead of being placed into `import/`.
+
+**Nothing destructive needs to happen here.** The original Takeout archive and the bytes extracted from it are never modified by this check — only the already-extracted temporary copy is discarded. To recover the item, obtain a clean copy of the affected file from the original Takeout export (for example, by re-exporting that item from Google Takeout) and rerun `prepare`/`resume` against a source that includes the corrected entry.
+
+## Metadata embedding fell back to the original file
+
+`gfotos-migrator` embeds sidecar metadata (dates, GPS, title, description) into output media via ExifTool transactionally: ExifTool writes to a temporary copy, which is validated by content before atomically replacing the real output file. If the enriched copy fails that validation, the previously valid, unmodified output file is left in place and the affected fields are reported as `unsupported` in the bundle report rather than `applied`.
+
+**Nothing destructive needs to happen here.** The output file in `import/` is intentionally preserved unmodified in this case, and the sidecar's original values remain readable from the bundle report and from `.gfotos-migrator/sidecars/`. No action is required unless you want the metadata embedded by another tool after the manual import step.
+
 ## The bundle is missing on the selected destination
 
 `status` and `report` require an existing Import Bundle manifest. If a command reports `No bundle found at the specified volume. Run \`prepare\` first.`, confirm that you pointed `--volume` at a destination with a valid `.gfotos-migrator/manifest.json`. If the destination has never been prepared, run `prepare` first.

@@ -7,6 +7,7 @@ import type {BundleItem, BundleManifest, BundlePaths, MetadataField, MetadataFie
 import {METADATA_FIELDS, metadataFieldValue, metadataHasField} from './domain.js';
 import {extractEntry, inventoryTakeout, listTakeoutArchives, readTakeoutMetadataWithState, sha256File} from './takeout.js';
 import {applyTakeoutMetadata} from './media.js';
+import {validateMediaFile} from './media-validate.js';
 import {ensureDirectory} from './system.js';
 
 export interface BundleProgress {
@@ -246,6 +247,18 @@ export async function prepareBundle(
         await extractEntry(candidate.archivePath, candidate.entryPath, tempFile);
         const hash = await sha256File(tempFile);
 
+        // Validate the extracted source by content, not solely by its file extension, before
+        // it can ever be reported as materialized. This only inspects the already-extracted
+        // temp copy; the original Takeout archive is never touched.
+        const validation = await validateMediaFile(tempFile, candidate.kind);
+        if (validation.status !== 'valid') {
+          const reason = validation.reason
+            ?? (validation.status === 'unchecked'
+              ? 'the extracted file uses a known format that is currently unchecked by content validation.'
+              : 'the extracted file failed content validation.');
+          throw new Error(`Rejected (${validation.status}): ${reason}`);
+        }
+
         // Extract the sidecar (if any) to a temp location so we can normalize its metadata
         // regardless of whether this candidate ends up materialized or as a duplicate.
         const hasSidecar = candidate.sidecarEntryPath !== undefined;
@@ -302,6 +315,10 @@ export async function prepareBundle(
           const fieldStatuses = buildFieldStatuses(sidecarState, metadata, applied);
           database.saveItemMetadata({hash, sidecarState, metadata, fieldStatuses, sourceArchive: archiveName, sourceEntry: candidate.entryPath});
 
+          // Compute the final-output hash after any enrichment has settled, distinct from the
+          // source/dedup hash above, which must keep referring to the pre-enrichment content.
+          const finalHash = await sha256File(finalDest);
+
           const item: BundleItem = {
             hash,
             archiveName,
@@ -309,7 +326,8 @@ export async function prepareBundle(
             mediaKind: candidate.kind,
             state: 'materialized',
             hasSidecar,
-            finalPath: flatName
+            finalPath: flatName,
+            finalHash
           };
           database.save(item);
           progress.materialized++;
