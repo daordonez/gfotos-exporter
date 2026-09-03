@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.5.0...gfotos-migrator-v1.5.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* add clean TUI exit and record MVP checkpoint ([dbf9732](https://github.com/daordonez/gfotos-exporter/commit/dbf97323f638d2ef262260c5d086d46662e1c79b))
+* add clean TUI exit and record MVP checkpoint ([81f4f69](https://github.com/daordonez/gfotos-exporter/commit/81f4f693e06910f097dd49e29f5017ac11536716))
+
 ## [1.5.0](https://github.com/daordonez/gfotos-exporter/compare/gfotos-migrator-v1.4.1...gfotos-migrator-v1.5.0) (2026-09-02)
 
 
