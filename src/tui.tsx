@@ -55,6 +55,7 @@ function Banner(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
+  const {exit} = useApp();
   const [screen, setScreen] = useState<Screen>('checking-update');
   const [sourcePath, setSourcePath] = useState('');
   const [volumePath, setVolumePath] = useState('');
@@ -234,19 +235,21 @@ function App(): React.JSX.Element {
     {screen === 'checking-update' && <Spinner label="Checking for updates..."/>}
     {screen === 'update-available' && availableUpdate && <><StatusMessage variant="info">{`Version ${availableUpdate.version} is available.`}</StatusMessage><Text>{`Update from ${VERSION} now?`}</Text><ConfirmInput defaultChoice="cancel" onConfirm={() => void applyUpdate()} onCancel={() => setScreen('menu')}/></>}
     {screen === 'updating' && <Spinner label="Downloading and installing the update..."/>}
-    {screen === 'update-complete' && <><StatusMessage variant="success">Update installed successfully.</StatusMessage><Text>Restart gfotos-migrator to use the new version.</Text><ConfirmInput defaultChoice="confirm" onConfirm={() => process.exit(0)} onCancel={() => process.exit(0)}/></>}
+    {screen === 'update-complete' && <><StatusMessage variant="success">Update installed successfully.</StatusMessage><Text>Restart gfotos-migrator to use the new version.</Text><ConfirmInput defaultChoice="confirm" onConfirm={exit} onCancel={exit}/></>}
 
     {screen === 'menu' && <>
       <Text>Prepares a Google Takeout Import Bundle on a destination volume of your choice.</Text>
       <Text dimColor>No Photos automation, iCloud change, or disk formatting is performed.</Text>
       <Select options={[
         {label: 'Start guided migration', value: 'start'},
-        {label: 'Tools', value: 'tools'}
+        {label: 'Tools', value: 'tools'},
+        {label: 'Exit', value: 'exit'}
       ]} onChange={value => {
         setError(undefined);
         setErrorAction(undefined);
         if (value === 'start') setScreen('source');
-        else setScreen('tools');
+        else if (value === 'tools') setScreen('tools');
+        else exit();
       }}/>
     </>}
 

@@ -963,13 +963,15 @@ test('prepareFailureAction limits fresh-start guidance to bundle-state errors', 
   );
 });
 
-test('compiled TUI exposes the exact root menu and Tools submenu labels', async () => {
+test('compiled TUI exposes root navigation, clean exit, and Tools submenu labels', async () => {
   const root = path.resolve(fileURLToPath(import.meta.url), '../../');
   const {readFile: readFileFn} = await import('node:fs/promises');
   const tuiSource = await readFileFn(path.join(root, 'dist', 'tui.js'), 'utf8');
-  for (const label of ['Start guided migration', 'Tools']) {
+  for (const label of ['Start guided migration', 'Tools', 'Exit']) {
     assert.ok(tuiSource.includes(label), `root menu should include: ${label}`);
   }
+  assert.ok(tuiSource.includes('useApp()'), 'the TUI should use the Ink application lifecycle');
+  assert.ok(!tuiSource.includes('process.exit(0)'), 'the TUI should not force process termination');
   for (const label of ['Inspect Takeout', 'Prepare or resume Import Bundle', 'Status', 'Report', 'Back']) {
     assert.ok(tuiSource.includes(label), `Tools submenu should include: ${label}`);
   }
