@@ -17,6 +17,8 @@ No other top-level entries are created by bundle preparation. If a future native
 
 Google Takeout sidecar JSON is preserved under `.gfotos-migrator/sidecars/` and normalized into SQLite state so the bundle can report provenance, missing fields, invalid JSON, and conflicting values across duplicates. When supported by the output file format and local ExifTool installation, `gfotos-migrator` also verifies selected fields after embedding them into the copied media file.
 
+Before an item is reported as `materialized`, its extracted bytes are validated by content (JPEG/PNG/MP4 structure is parsed; the file extension alone is never trusted). A structurally invalid extracted source is recorded as `failed` with a diagnostic message and is never written into `import/`; the original Takeout archive and the bytes extracted from it are left untouched. Metadata embedding via ExifTool is transactional: ExifTool writes into a temporary sibling copy, which is content-validated before atomically replacing the real output file. If the enriched copy fails validation, the previously valid output file is left in place, unmodified, and the affected metadata fields are reported as `unsupported` rather than `applied`.
+
 The bundle report is the authoritative record of what was preserved before the manual import step:
 
 - `applied`: a supported field was verified as embedded into the output media file.

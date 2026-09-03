@@ -62,26 +62,33 @@ export class BundleDatabase {
         UNIQUE (hash, field, source_archive, source_entry)
       ) STRICT;
     `);
+
+    // CREATE TABLE IF NOT EXISTS does not add columns to an already-existing database file,
+    // so migrate bundle databases created before the final-output hash field was introduced.
+    const columns = this.database.prepare('PRAGMA table_info(bundle_items)').all() as Array<{name: string}>;
+    if (!columns.some(column => column.name === 'final_hash')) {
+      this.database.exec('ALTER TABLE bundle_items ADD COLUMN final_hash TEXT');
+    }
   }
 
   find(hash: string): BundleItem | undefined {
     const row = this.database
-      .prepare("SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar FROM bundle_items WHERE hash = ? AND state = 'materialized' LIMIT 1")
+      .prepare("SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, final_hash AS finalHash FROM bundle_items WHERE hash = ? AND state = 'materialized' LIMIT 1")
       .get(hash) as RawRow | undefined;
     return row ? toItem(row) : undefined;
   }
 
   findByEntry(archiveName: string, entryPath: string): BundleItem | undefined {
     const row = this.database
-      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar FROM bundle_items WHERE archive_name = ? AND entry_path = ?')
+      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, final_hash AS finalHash FROM bundle_items WHERE archive_name = ? AND entry_path = ?')
       .get(archiveName, entryPath) as RawRow | undefined;
     return row ? toItem(row) : undefined;
   }
 
   save(item: BundleItem): void {
     this.database.prepare(`
-      INSERT INTO bundle_items (hash, archive_name, entry_path, media_kind, state, final_path, canonical_hash, error, has_sidecar)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO bundle_items (hash, archive_name, entry_path, media_kind, state, final_path, canonical_hash, error, has_sidecar, final_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(archive_name, entry_path) DO UPDATE SET
         hash = excluded.hash,
         state = excluded.state,
@@ -89,6 +96,7 @@ export class BundleDatabase {
         canonical_hash = excluded.canonical_hash,
         error = excluded.error,
         has_sidecar = excluded.has_sidecar,
+        final_hash = excluded.final_hash,
         updated_at = CURRENT_TIMESTAMP
     `).run(
       item.hash,
@@ -99,7 +107,8 @@ export class BundleDatabase {
       item.finalPath ?? null,
       item.canonicalHash ?? null,
       item.error ?? null,
-      item.hasSidecar ? 1 : 0
+      item.hasSidecar ? 1 : 0,
+      item.finalHash ?? null
     );
   }
 
@@ -126,7 +135,7 @@ export class BundleDatabase {
 
   listItems(): BundleItem[] {
     return (this.database
-      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar FROM bundle_items ORDER BY updated_at ASC')
+      .prepare('SELECT hash, archive_name AS archiveName, entry_path AS entryPath, media_kind AS mediaKind, state, final_path AS finalPath, canonical_hash AS canonicalHash, error, has_sidecar AS hasSidecar, final_hash AS finalHash FROM bundle_items ORDER BY updated_at ASC')
       .all() as unknown as RawRow[]).map(toItem);
   }
 
@@ -257,6 +266,7 @@ interface RawRow {
   canonicalHash: string | null;
   error: string | null;
   hasSidecar: number;
+  finalHash: string | null;
 }
 
 function toItem(row: RawRow): BundleItem {
@@ -269,6 +279,7 @@ function toItem(row: RawRow): BundleItem {
     hasSidecar: row.hasSidecar === 1,
     finalPath: row.finalPath ?? undefined,
     canonicalHash: row.canonicalHash ?? undefined,
-    error: row.error ?? undefined
+    error: row.error ?? undefined,
+    finalHash: row.finalHash ?? undefined
   };
 }

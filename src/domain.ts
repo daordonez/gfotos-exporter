@@ -36,6 +36,8 @@ export interface BundleItem {
   finalPath?: string;
   canonicalHash?: string;
   error?: string;
+  /** SHA-256 of the final bytes actually written to `import/` after any metadata enrichment; distinct from `hash`, which is the source fingerprint used for deduplication. */
+  finalHash?: string;
 }
 
 export interface BundleManifest {

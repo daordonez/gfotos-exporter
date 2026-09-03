@@ -1,5 +1,7 @@
+import {copyFile, rename, unlink} from 'node:fs/promises';
 import {run} from './system.js';
 import type {MediaKind, MetadataField, MetadataFieldStatuses, TakeoutMetadata} from './domain.js';
+import {validateMediaFile} from './media-validate.js';
 
 function exifDate(date: Date): string {
   return date.toISOString().replace(/[-T]/g, ':').replace(/\.\d{3}Z$/, '+00:00');
@@ -77,32 +79,65 @@ function signedAltitude(readBackResult: ReadBack): number | undefined {
   return readBackResult.GPSAltitudeRef === 1 ? -readBackResult.GPSAltitude : readBackResult.GPSAltitude;
 }
 
+function degradeAll(fields: MetadataField[]): MetadataFieldStatuses {
+  const statuses: MetadataFieldStatuses = {};
+  for (const field of fields) statuses[field] = 'unsupported';
+  return statuses;
+}
+
 /**
  * Writes capture date, GPS, title, and description fields into the output media file via ExifTool,
  * then reads the file back to verify which fields were actually embedded. Fields that ExifTool
  * cannot write for a given format (e.g. GPS on some legacy formats) are reported as 'unsupported'
  * rather than causing the whole item to fail. Never throws: a missing or broken ExifTool binary
  * degrades every present field to 'unsupported' so the caller can keep processing other items.
+ *
+ * Enrichment is transactional: ExifTool never runs against `filePath` directly. Instead it runs
+ * against a temporary sibling copy, which is then content-validated with `validateMediaFile`
+ * before being atomically renamed onto `filePath`. If the copy, the ExifTool run, the post-write
+ * validation, or the final read-back fails, the temporary file is discarded and every present
+ * field is degraded to 'unsupported' — the original output file on disk is left byte-for-byte
+ * unchanged.
  */
 export async function applyTakeoutMetadata(filePath: string, kind: MediaKind, metadata: TakeoutMetadata): Promise<MetadataFieldStatuses> {
   const fields = presentFields(metadata);
-  const statuses: MetadataFieldStatuses = {};
-  if (fields.length === 0) return statuses;
+  if (fields.length === 0) return {};
+
+  const tempPath = `${filePath}.enrich-${Date.now()}-${process.pid}.tmp`;
+  try {
+    await copyFile(filePath, tempPath);
+  } catch {
+    return degradeAll(fields);
+  }
 
   const args = buildArguments(kind, metadata);
   try {
-    await run('/usr/bin/env', ['exiftool', '-overwrite_original', '-api', 'QuickTimeUTC=1', ...args, filePath]);
+    await run('/usr/bin/env', ['exiftool', '-overwrite_original', '-api', 'QuickTimeUTC=1', ...args, tempPath]);
   } catch {
-    for (const field of fields) statuses[field] = 'unsupported';
-    return statuses;
+    await unlink(tempPath).catch(() => undefined);
+    return degradeAll(fields);
   }
 
-  const readBackResult = await readBack(filePath);
+  const validation = await validateMediaFile(tempPath, kind);
+  if (validation.status === 'invalid') {
+    await unlink(tempPath).catch(() => undefined);
+    return degradeAll(fields);
+  }
+
+  const readBackResult = await readBack(tempPath);
   if (!readBackResult) {
-    for (const field of fields) statuses[field] = 'unsupported';
-    return statuses;
+    await unlink(tempPath).catch(() => undefined);
+    return degradeAll(fields);
   }
 
+  try {
+    await rename(tempPath, filePath);
+  } catch {
+    await unlink(tempPath).catch(() => undefined);
+    return degradeAll(fields);
+  }
+
+  const statuses: MetadataFieldStatuses = {};
   for (const field of fields) statuses[field] = fieldApplied(field, metadata, readBackResult) ? 'applied' : 'unsupported';
   return statuses;
 }

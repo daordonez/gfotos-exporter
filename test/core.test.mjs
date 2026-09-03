@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile, readFile, mkdir} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile, readFile, mkdir, readdir} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {promisify} from 'node:util';
@@ -15,9 +15,15 @@ import {isSelectableExternalVolume, parentWholeDiskIdentifier, volumeMountPath} 
 import {BundleDatabase} from '../dist/bundle-database.js';
 import {checkBundleVolume, initializeBundlePaths, loadManifest, requiredBundleBytes, safeImportFilename, validateBundleCompatibility, prepareBundle, writeBundleReport} from '../dist/bundle.js';
 import {applyTakeoutMetadata, exifToolAvailable} from '../dist/media.js';
+import {detectContainer, validateJpeg, validateMediaFile, validateMp4, validatePng} from '../dist/media-validate.js';
 
 const execute = promisify(execFile);
 const require = createRequire(import.meta.url);
+
+// A tiny (2x2 pixel) but structurally valid JPEG, reused as the shared valid-media fixture
+// content wherever these tests need real image bytes rather than plain ASCII placeholders.
+const MINIMAL_VALID_JPEG_BASE64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAACAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDFoooryz7w/9k=';
+const MINIMAL_VALID_JPEG = Buffer.from(MINIMAL_VALID_JPEG_BASE64, 'base64');
 
 test('rejects unsafe archive paths', () => {
   assert.equal(isSafeArchivePath('../escape.jpg'), false);
@@ -520,9 +526,9 @@ test('bundle deduplication: second occurrence becomes duplicate', async () => {
     const volumeDir = path.join(directory, 'volume');
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
-    await writeFile(path.join(sourceDir, 'photo.jpg'), 'identical-content');
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
-    await writeFile(path.join(sourceDir, 'photo2.jpg'), 'identical-content');
+    await writeFile(path.join(sourceDir, 'photo2.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['archive2.zip', 'photo2.jpg'], {cwd: sourceDir});
     const result = await prepareBundle(volumeDir, sourceDir, () => {});
     assert.equal(result.materialized, 1, 'one unique item should be materialized');
@@ -539,7 +545,7 @@ test('bundle resumes from existing state and skips materialized items', async ()
     const volumeDir = path.join(directory, 'volume');
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
-    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-data');
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
     const first = await prepareBundle(volumeDir, sourceDir, () => {});
     assert.equal(first.materialized, 1);
@@ -558,11 +564,11 @@ test('bundle deduplication: three identical files yield one output and two dupli
     const volumeDir = path.join(directory, 'volume');
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
-    await writeFile(path.join(sourceDir, 'a.jpg'), 'triple-identical');
+    await writeFile(path.join(sourceDir, 'a.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['arc1.zip', 'a.jpg'], {cwd: sourceDir});
-    await writeFile(path.join(sourceDir, 'b.jpg'), 'triple-identical');
+    await writeFile(path.join(sourceDir, 'b.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['arc2.zip', 'b.jpg'], {cwd: sourceDir});
-    await writeFile(path.join(sourceDir, 'c.jpg'), 'triple-identical');
+    await writeFile(path.join(sourceDir, 'c.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['arc3.zip', 'c.jpg'], {cwd: sourceDir});
     const result = await prepareBundle(volumeDir, sourceDir, () => {});
     assert.equal(result.materialized, 1, 'exactly one file should be materialized');
@@ -605,7 +611,7 @@ test('CLI rejects an unknown command with a non-zero exit code', async () => {
 
 async function makeSyntheticTakeout(sourceDir) {
   await mkdir(sourceDir, {recursive: true});
-  await writeFile(path.join(sourceDir, 'photo.jpg'), 'cli-fixture-photo');
+  await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
   await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({photoTakenTime: {timestamp: '1700000000'}}));
   await execute('/usr/bin/zip', ['takeout-1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
 }
@@ -763,14 +769,23 @@ function buildMinimalMp4() {
   return Buffer.concat([ftyp, moov]);
 }
 
-// A tiny (2x2 pixel) but structurally valid JPEG, so ExifTool can actually write and verify tags.
-const MINIMAL_VALID_JPEG_BASE64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAACAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDFoooryz7w/9k=';
+/** Same minimal MP4 as buildMinimalMp4(), but with a leading `free` padding box before `ftyp`, as some encoders/editors emit. */
+function buildMinimalMp4WithLeadingPadding() {
+  const box = (type, data = Buffer.alloc(0)) => {
+    const header = Buffer.alloc(8);
+    header.writeUInt32BE(8 + data.length, 0);
+    header.write(type, 4, 'ascii');
+    return Buffer.concat([header, data]);
+  };
+  const free = box('free', Buffer.alloc(16));
+  return Buffer.concat([free, buildMinimalMp4()]);
+}
 
 test('applyTakeoutMetadata embeds dates, GPS, title, and description into a JPEG', {skip: !HAS_EXIFTOOL && 'exiftool is not installed in this environment'}, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-jpg-'));
   try {
     const filePath = path.join(directory, 'photo.jpg');
-    await writeFile(filePath, Buffer.from(MINIMAL_VALID_JPEG_BASE64, 'base64'));
+    await writeFile(filePath, MINIMAL_VALID_JPEG);
     const metadata = {
       takenAt: new Date('2021-01-01T00:00:00.000Z'),
       title: 'My Photo',
@@ -849,11 +864,11 @@ test('prepareBundle records a metadata conflict when duplicate media has diverge
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
 
-    await writeFile(path.join(sourceDir, 'photo.jpg'), 'identical-bytes-for-conflict-test');
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
     await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({title: 'Original Title', photoTakenTime: {timestamp: '1609459200'}}));
     await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
 
-    await writeFile(path.join(sourceDir, 'photo-copy.jpg'), 'identical-bytes-for-conflict-test');
+    await writeFile(path.join(sourceDir, 'photo-copy.jpg'), MINIMAL_VALID_JPEG);
     await writeFile(path.join(sourceDir, 'photo-copy.jpg.json'), JSON.stringify({title: 'Different Title', photoTakenTime: {timestamp: '1609459200'}}));
     await execute('/usr/bin/zip', ['archive2.zip', 'photo-copy.jpg', 'photo-copy.jpg.json'], {cwd: sourceDir});
 
@@ -897,7 +912,7 @@ test('prepareBundle materializes media even when the sidecar JSON is malformed',
     const volumeDir = path.join(directory, 'volume');
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
-    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-bytes');
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
     await writeFile(path.join(sourceDir, 'photo.jpg.json'), '{ not valid json at all');
     await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
 
@@ -973,7 +988,7 @@ test('prepareBundle materializes media when there is no sidecar at all', async (
     const volumeDir = path.join(directory, 'volume');
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
-    await writeFile(path.join(sourceDir, 'photo.jpg'), 'photo-bytes-no-sidecar');
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
     await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
 
     const result = await prepareBundle(volumeDir, sourceDir, () => {});
@@ -1000,7 +1015,7 @@ test('writeBundleReport includes a Metadata section with counts and conflicts', 
     const volumeDir = path.join(directory, 'volume');
     await mkdir(sourceDir, {recursive: true});
     await mkdir(volumeDir, {recursive: true});
-    await writeFile(path.join(sourceDir, 'photo.jpg'), 'report-photo-bytes');
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
     await writeFile(path.join(sourceDir, 'photo.jpg.json'), JSON.stringify({title: 'Report Title', photoTakenTime: {timestamp: '1609459200'}}));
     await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg', 'photo.jpg.json'], {cwd: sourceDir});
     await prepareBundle(volumeDir, sourceDir, () => {});
@@ -1010,6 +1025,197 @@ test('writeBundleReport includes a Metadata section with counts and conflicts', 
     assert.match(report, /## Metadata/);
     assert.match(report, /applied \(embedded into output media\)/);
     assert.match(report, /conflicting \(same hash, divergent sidecar values\)/);
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// --- Content-based media validation (src/media-validate.ts) ---
+
+const {crc32} = await import('node:zlib');
+
+/** Minimal but structurally valid single-pixel PNG (signature + IHDR + IEND, no IDAT). */
+function buildMinimalPng() {
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length, 0);
+    const typeBuf = Buffer.from(type, 'ascii');
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
+    return Buffer.concat([length, typeBuf, data, crc]);
+  };
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdrData = Buffer.alloc(13);
+  ihdrData.writeUInt32BE(1, 0);
+  ihdrData.writeUInt32BE(1, 4);
+  ihdrData[8] = 8;
+  ihdrData[9] = 6;
+  const ihdr = chunk('IHDR', ihdrData);
+  const iend = chunk('IEND', Buffer.alloc(0));
+  return Buffer.concat([signature, ihdr, iend]);
+}
+
+test('detectContainer sniffs by magic bytes only', () => {
+  assert.equal(detectContainer(MINIMAL_VALID_JPEG), 'jpeg');
+  assert.equal(detectContainer(buildMinimalPng()), 'png');
+  assert.equal(detectContainer(buildMinimalMp4()), 'mp4');
+  assert.equal(detectContainer(Buffer.from('this is not media at all')), 'unknown');
+});
+
+test('detectContainer recognizes an MP4 with a leading padding box before ftyp', () => {
+  const padded = buildMinimalMp4WithLeadingPadding();
+  assert.equal(detectContainer(padded), 'mp4', 'a leading free/skip/wide box before ftyp must not cause misclassification as unknown');
+});
+
+test('validateMediaFile accepts an MP4 with a leading padding box before ftyp as valid', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-mp4-padding-'));
+  try {
+    const filePath = path.join(directory, 'clip.mp4');
+    await writeFile(filePath, buildMinimalMp4WithLeadingPadding());
+    const result = await validateMediaFile(filePath, 'video');
+    assert.equal(result.status, 'valid');
+    assert.equal(result.container, 'mp4');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('validateJpeg accepts a structurally valid JPEG and rejects truncation', () => {
+  const valid = validateJpeg(MINIMAL_VALID_JPEG);
+  assert.equal(valid.status, 'valid');
+  assert.equal(valid.container, 'jpeg');
+
+  const truncated = validateJpeg(MINIMAL_VALID_JPEG.subarray(0, MINIMAL_VALID_JPEG.length - 10));
+  assert.equal(truncated.status, 'invalid');
+  assert.ok(truncated.reason);
+
+  const garbageAfterSoi = validateJpeg(Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from('not a real jpeg segment at all, just noise')]));
+  assert.equal(garbageAfterSoi.status, 'invalid');
+});
+
+test('validatePng accepts a minimal valid PNG and rejects CRC mismatches and missing IEND', () => {
+  const png = buildMinimalPng();
+  const valid = validatePng(png);
+  assert.equal(valid.status, 'valid');
+  assert.equal(valid.container, 'png');
+
+  const corrupted = Buffer.from(png);
+  corrupted[20] = corrupted[20] ^ 0xff; // flip a byte inside the IHDR chunk's data
+  const crcFailure = validatePng(corrupted);
+  assert.equal(crcFailure.status, 'invalid');
+
+  const missingIend = png.subarray(0, png.length - 12); // drop the trailing IEND chunk
+  const noIend = validatePng(missingIend);
+  assert.equal(noIend.status, 'invalid');
+});
+
+test('validateMp4 accepts the minimal fixture and rejects a truncated ftyp box', () => {
+  const mp4 = buildMinimalMp4();
+  const valid = validateMp4(mp4);
+  assert.equal(valid.status, 'valid');
+  assert.equal(valid.container, 'mp4');
+
+  const truncated = validateMp4(mp4.subarray(0, 5)); // cut off mid-ftyp-box
+  assert.equal(truncated.status, 'invalid');
+});
+
+test('validateMediaFile rejects unrecognized content and reports unchecked for formats without a validator', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-validate-'));
+  try {
+    const garbagePath = path.join(directory, 'broken.jpg');
+    await writeFile(garbagePath, Buffer.from('totally not a jpeg, just plain garbage bytes'));
+    const garbageResult = await validateMediaFile(garbagePath, 'image');
+    assert.equal(garbageResult.status, 'invalid');
+    assert.equal(garbageResult.container, 'unknown');
+
+    const heicPath = path.join(directory, 'photo.heic');
+    await writeFile(heicPath, Buffer.from('arbitrary bytes for a format this repo does not validate yet'));
+    const heicResult = await validateMediaFile(heicPath, 'image');
+    assert.equal(heicResult.status, 'unchecked');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// --- prepareBundle: content validation of extracted source media ---
+
+test('prepareBundle records structurally invalid extracted media as failed, not materialized', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-invalid-media-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'broken.jpg'), Buffer.from('this is not a real jpeg, just garbage bytes'));
+    await execute('/usr/bin/zip', ['archive1.zip', 'broken.jpg'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 0, 'structurally invalid media must never be reported as materialized');
+    assert.equal(result.failed, 1);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const db = await BundleDatabase.open(paths.databasePath);
+    try {
+      const items = db.listItems();
+      assert.equal(items.length, 1);
+      assert.equal(items[0].state, 'failed');
+      assert.equal(typeof items[0].error, 'string');
+      assert.ok(items[0].error.length > 0);
+    } finally {
+      db.close();
+    }
+
+    const importEntries = await readdir(paths.importPath);
+    assert.ok(!importEntries.includes('broken.jpg'), 'import/ must not contain the rejected entry');
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+test('prepareBundle persists a distinct final-output hash alongside the source hash for valid media', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-bundle-finalhash-'));
+  try {
+    const sourceDir = path.join(directory, 'source');
+    const volumeDir = path.join(directory, 'volume');
+    await mkdir(sourceDir, {recursive: true});
+    await mkdir(volumeDir, {recursive: true});
+    await writeFile(path.join(sourceDir, 'photo.jpg'), MINIMAL_VALID_JPEG);
+    await execute('/usr/bin/zip', ['archive1.zip', 'photo.jpg'], {cwd: sourceDir});
+
+    const result = await prepareBundle(volumeDir, sourceDir, () => {});
+    assert.equal(result.materialized, 1);
+    assert.equal(result.failed, 0);
+
+    const paths = await initializeBundlePaths(volumeDir);
+    const db = await BundleDatabase.open(paths.databasePath);
+    try {
+      const items = db.listItems();
+      assert.equal(items.length, 1);
+      assert.equal(items[0].state, 'materialized');
+      assert.equal(typeof items[0].finalHash, 'string');
+      assert.ok(items[0].finalHash.length > 0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await rm(directory, {recursive: true, force: true});
+  }
+});
+
+// --- media.ts: transactional enrichment leaves the original output untouched on failure ---
+
+test('applyTakeoutMetadata never mutates the output file when enrichment does not fully succeed', {skip: !HAS_EXIFTOOL && 'exiftool is not installed in this environment'}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'gfotos-media-transactional-'));
+  try {
+    const filePath = path.join(directory, 'not-really-a-photo.jpg');
+    const originalBytes = Buffer.from('this is definitely not an image file, just plain garbage bytes');
+    await writeFile(filePath, originalBytes);
+
+    const statuses = await applyTakeoutMetadata(filePath, 'image', {title: 'Will not stick'});
+
+    const bytesAfter = await readFile(filePath);
+    assert.ok(bytesAfter.equals(originalBytes), 'the original output file must be left byte-for-byte unchanged when enrichment does not fully succeed');
+    assert.equal(statuses.title, 'unsupported');
   } finally {
     await rm(directory, {recursive: true, force: true});
   }
