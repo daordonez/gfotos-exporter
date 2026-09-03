@@ -85,6 +85,12 @@ function degradeAll(fields: MetadataField[]): MetadataFieldStatuses {
   return statuses;
 }
 
+function isRenameReplaceError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EEXIST' || code === 'EPERM';
+}
+
 /**
  * Writes capture date, GPS, title, and description fields into the output media file via ExifTool,
  * then reads the file back to verify which fields were actually embedded. Fields that ExifTool
@@ -132,9 +138,19 @@ export async function applyTakeoutMetadata(filePath: string, kind: MediaKind, me
 
   try {
     await rename(tempPath, filePath);
-  } catch {
-    await unlink(tempPath).catch(() => undefined);
-    return degradeAll(fields);
+  } catch (error) {
+    if (!isRenameReplaceError(error)) {
+      await unlink(tempPath).catch(() => undefined);
+      return degradeAll(fields);
+    }
+
+    try {
+      await copyFile(tempPath, filePath);
+      await unlink(tempPath).catch(() => undefined);
+    } catch {
+      await unlink(tempPath).catch(() => undefined);
+      return degradeAll(fields);
+    }
   }
 
   const statuses: MetadataFieldStatuses = {};
